@@ -52,13 +52,25 @@ class ApiClient:
 
     # --- Endpoints ---
 
-    def poll(self, gpu_info: dict | None = None, blender_version: str | None = None) -> dict[str, Any]:
-        """Hace heartbeat al server y pide el siguiente job. Devuelve {agent, job?}."""
+    def poll(
+        self,
+        gpu_info: dict | None = None,
+        blender_version: str | None = None,
+        library_scenes: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        """Hace heartbeat al server y pide el siguiente job. Devuelve {agent, job?}.
+
+        library_scenes: lista de .blend en library_dir. Cada item:
+            { "name": str, "path": str, "size_kb": int }
+        El server los expone en /api/library para que la UI los muestre.
+        """
         params = {}
         if gpu_info:
             params["gpu"] = json.dumps(gpu_info)
         if blender_version:
             params["blender"] = blender_version
+        if library_scenes is not None:
+            params["library"] = json.dumps(library_scenes)
         return self._request("GET", "/api/agent/poll", params=params)
 
     def claim(self, job_id: str) -> dict[str, Any]:
