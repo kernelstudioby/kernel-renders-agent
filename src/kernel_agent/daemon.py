@@ -12,7 +12,7 @@ from pathlib import Path
 from .api_client import ApiClient, ApiError
 from .config import AgentConfig
 from .executor import execute_plan
-from .storage import stage_render
+from .storage import upload_render
 
 log = logging.getLogger("kernel-agent.daemon")
 
@@ -99,26 +99,31 @@ class AgentDaemon:
             self.client.complete_failure(job_id, err_msg)
             return
 
-        # Éxito: preparar metadatos de outputs y reportar
+        # Éxito: subir outputs a Supabase Storage y reportar
         renders = []
-        for idx, output in enumerate(exec_result.outputs):
+        for output in exec_result.outputs:
             p = Path(output)
             if not p.exists():
                 continue
             view_name = p.stem
-            staged = stage_render(p, job_id, view_name)
-            renders.append({
-                "view": view_name,
-                "format": p.suffix.lstrip(".").lower() or "png",
-                "storage_path": staged.storage_path,
-                "size_bytes": staged.size_bytes,
-                "width": staged.width,
-                "height": staged.height,
-            })
+            try:
+                uploaded = upload_render(p, job_id, view_name, self.client)
+                renders.append({
+                    "view": view_name,
+                    "format": p.suffix.lstrip(".").lower() or "png",
+                    "storage_path": uploaded.storage_path,
+                    "public_url": uploaded.public_url,
+                    "size_bytes": uploaded.size_bytes,
+                    "width": uploaded.width,
+                    "height": uploaded.height,
+                })
+                log.info("  ↑ subido %s (%d KB)", view_name, uploaded.size_bytes // 1024)
+            except Exception as e:  # noqa: BLE001
+                log.error("Upload de %s falló: %s", view_name, e)
 
         if not renders:
-            log.warning("Job %s completó sin outputs visibles. Marcando failed.", job_id)
-            self.client.complete_failure(job_id, "no outputs were produced")
+            log.warning("Job %s completó sin outputs subibles. Marcando failed.", job_id)
+            self.client.complete_failure(job_id, "no outputs were uploaded")
             return
 
         log.info("Job %s OK · %ss · %d renders", job_id, exec_result.duration_seconds, len(renders))

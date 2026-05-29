@@ -1,15 +1,12 @@
-"""Upload de PNGs a Supabase Storage.
+"""Upload de PNGs a Supabase Storage via signed upload URL.
 
-Patrón: el agent NO se conecta directo a Supabase con service_role
-(eso sería un secret en cada PC). En su lugar, el server (Vercel) firma
-una URL pre-firmada y el agent hace el upload con esa URL temporal.
+Flujo:
+  1. Agent llama POST /api/agent/upload-url/:job_id { view } → recibe signed_url + storage_path + public_url
+  2. Agent hace PUT al signed_url con el binario del PNG
+  3. Agent reporta el storage_path + public_url al server via /api/agent/complete
 
-Para v1 simple: hacemos upload directo al bucket público 'renders'
-usando el api_key del agent como auth contra un endpoint proxy
-/api/agent/upload (no implementado todavía — fase siguiente).
-
-Por ahora `upload_render` devuelve el path local + un public_url placeholder
-que será reemplazado cuando agreguemos el upload real.
+Esto bypass del límite de 4.5 MB de Vercel functions porque el upload va
+directo a Supabase Storage, no por el server intermedio.
 """
 
 from __future__ import annotations
@@ -17,6 +14,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+
+import httpx
 
 
 @dataclass
@@ -38,7 +37,6 @@ def _file_sha256(path: Path) -> str:
 
 
 def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
-    """Lee dimensiones de un PNG sin dependencias externas (parsea header IHDR)."""
     try:
         with path.open("rb") as f:
             header = f.read(24)
@@ -51,26 +49,52 @@ def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
         return (None, None)
 
 
-def stage_render(
+def upload_render(
     local_path: Path,
     job_id: str,
     view: str,
+    api_client,
+    timeout: float = 120.0,
 ) -> UploadResult:
-    """Prepara un render local para reportarlo al server.
+    """Sube un PNG a Supabase Storage via signed URL.
 
-    Por ahora NO sube físicamente — solo calcula metadata (sha256, tamaño,
-    dimensiones). El upload real a Supabase Storage se hace en la fase
-    siguiente con bucket policy ajustada para que agents puedan escribir.
-
-    El storage_path es el destino lógico: jobs/<job_id>/<view>.png
+    Args:
+        local_path: path al PNG en disco
+        job_id: id del job
+        view: nombre lógico del render (ej "render-000deg")
+        api_client: instancia de ApiClient para pedir signed URL
+        timeout: timeout del PUT (default 120s para PNGs grandes)
     """
     size = local_path.stat().st_size
     sha = _file_sha256(local_path)
     w, h = _image_dimensions(local_path)
-    storage_path = f"jobs/{job_id}/{view}.png"
+
+    # 1. Pedir signed URL al server
+    resp = api_client._request(
+        "POST",
+        f"/api/agent/upload-url/{job_id}",
+        json={"view": view, "content_type": "image/png"},
+    )
+    signed_url = resp["signed_url"]
+    storage_path = resp["storage_path"]
+    public_url = resp.get("public_url")
+
+    # 2. PUT al signed URL con el binario del PNG
+    with local_path.open("rb") as f:
+        put_resp = httpx.put(
+            signed_url,
+            content=f.read(),
+            headers={"Content-Type": "image/png"},
+            timeout=timeout,
+        )
+    if put_resp.status_code >= 400:
+        raise RuntimeError(
+            f"upload PUT failed [{put_resp.status_code}]: {put_resp.text[:200]}"
+        )
+
     return UploadResult(
         storage_path=storage_path,
-        public_url=None,  # se llenará cuando hagamos upload real
+        public_url=public_url,
         size_bytes=size,
         sha256=sha,
         width=w,
