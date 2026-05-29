@@ -195,6 +195,11 @@ def execute_plan(
     work_dir = work_dir or Path(tempfile.mkdtemp(prefix="kernel-agent-"))
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # Descarga URLs de assets (de Supabase Storage) a tempfiles antes de
+    # generar el script de Blender, que asume rutas locales.
+    from .asset_materializer import materialize_plan_assets
+    plan = materialize_plan_assets(plan, work_dir / "assets")
+
     script_path = work_dir / "_run.py"
     log_path = work_dir / "_outputs.json"
     plan_json = json.dumps(plan)
