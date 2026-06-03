@@ -76,6 +76,40 @@ def run_set_active_view_layer(
     except (AttributeError, TypeError, ReferenceError):
         pass
 
+    # 4. Aplicar la visibilidad del view_layer a nivel de Collection.
+    # Por qué: render_views.py a veces crea una "fresh scene" para sortear
+    # locks de file_format. En esa fresh scene los layer_collections del
+    # original no existen — sus reglas exclude/include se perderían y se
+    # renderizaría TODO (dry + sweaty). Para que la visibilidad sobreviva
+    # ese reroute, copiamos `exclude` → `collection.hide_render` (global,
+    # scene-wide, persiste a través de scenes).
+    collections_hidden = []
+    collections_shown = []
+
+    def _walk_layer_collections(lc):
+        try:
+            target_excluded = bool(lc.exclude)
+        except AttributeError:
+            target_excluded = False
+        coll = lc.collection
+        try:
+            coll.hide_render = target_excluded
+            if target_excluded:
+                collections_hidden.append(coll.name)
+            else:
+                collections_shown.append(coll.name)
+        except AttributeError:
+            pass
+        for child in lc.children:
+            _walk_layer_collections(child)
+
+    try:
+        root_lc = target_vl.layer_collection
+        for child in root_lc.children:
+            _walk_layer_collections(child)
+    except AttributeError:
+        pass
+
     # NO guardamos. Cambios solo en memoria.
 
     return {
@@ -84,6 +118,8 @@ def run_set_active_view_layer(
         "new_view_layer": view_layer_name,
         "available_view_layers": available,
         "disabled_others": disabled,
+        "collections_hidden": collections_hidden,
+        "collections_shown": collections_shown,
         "success": True,
     }
 

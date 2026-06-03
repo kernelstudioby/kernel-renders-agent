@@ -276,6 +276,39 @@ def run_render_one_view(
             fresh_render_scene.render.film_transparent = original_scene.render.film_transparent
         except AttributeError:
             pass
+
+        # Copiar color management (CRÍTICO: si no se copia, el render sale
+        # con view_transform=Standard default y los colores cambian respecto
+        # al .blend original que usaba AgX/Filmic/etc).
+        for attr in ("view_transform", "look", "exposure", "gamma", "use_curve_mapping"):
+            try:
+                setattr(
+                    fresh_render_scene.view_settings,
+                    attr,
+                    getattr(original_scene.view_settings, attr),
+                )
+            except (AttributeError, TypeError):
+                pass
+        try:
+            fresh_render_scene.display_settings.display_device = (
+                original_scene.display_settings.display_device
+            )
+        except (AttributeError, TypeError):
+            pass
+        # Sequencer color space (a veces afecta al output final)
+        try:
+            fresh_render_scene.sequencer_colorspace_settings.name = (
+                original_scene.sequencer_colorspace_settings.name
+            )
+        except (AttributeError, TypeError):
+            pass
+        print(
+            f"[render fresh] view_transform={fresh_render_scene.view_settings.view_transform} "
+            f"look={fresh_render_scene.view_settings.look} "
+            f"display={fresh_render_scene.display_settings.display_device}",
+            flush=True,
+        )
+
         # World (HDRI/environment)
         if original_scene.world:
             fresh_render_scene.world = original_scene.world
@@ -437,6 +470,23 @@ def run_render_one_view(
             try:
                 fs_settings.color_depth = "8"
             except TypeError:
+                pass
+            # Color management: copiar del original así el PNG guardado
+            # respeta view_transform/look/exposure.
+            for attr in ("view_transform", "look", "exposure", "gamma", "use_curve_mapping"):
+                try:
+                    setattr(
+                        fresh_scene.view_settings,
+                        attr,
+                        getattr(blender_scene.view_settings, attr),
+                    )
+                except (AttributeError, TypeError):
+                    pass
+            try:
+                fresh_scene.display_settings.display_device = (
+                    blender_scene.display_settings.display_device
+                )
+            except (AttributeError, TypeError):
                 pass
             render_result.save_render(filepath=str(output), scene=fresh_scene)
         finally:
