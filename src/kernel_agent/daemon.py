@@ -102,8 +102,9 @@ class AgentDaemon:
             self.client.complete_failure(job_id, err_msg)
             return
 
-        # Éxito: subir outputs a Supabase Storage y reportar
+        # Éxito: subir outputs (si los hay) a Supabase Storage y reportar
         renders = []
+        upload_failures = 0
         for output in exec_result.outputs:
             p = Path(output)
             if not p.exists():
@@ -122,12 +123,26 @@ class AgentDaemon:
                 })
                 log.info("  ↑ subido %s (%d KB)", view_name, uploaded.size_bytes // 1024)
             except Exception as e:  # noqa: BLE001
+                upload_failures += 1
                 log.error("Upload de %s falló: %s", view_name, e)
 
-        if not renders:
-            log.warning("Job %s completó sin outputs subibles. Marcando failed.", job_id)
-            self.client.complete_failure(job_id, "no outputs were uploaded")
+        # Falla solo si: el plan produjo outputs pero TODOS fallaron al subir.
+        # Si el plan no produjo outputs (ej. solo inspect_scene), es completed sin renders.
+        if exec_result.outputs and not renders:
+            log.warning(
+                "Job %s produjo %d outputs pero ninguno subió.",
+                job_id,
+                len(exec_result.outputs),
+            )
+            self.client.complete_failure(
+                job_id, f"all {upload_failures} uploads failed"
+            )
             return
 
-        log.info("Job %s OK · %ss · %d renders", job_id, exec_result.duration_seconds, len(renders))
+        log.info(
+            "Job %s OK · %ss · %d renders",
+            job_id,
+            exec_result.duration_seconds,
+            len(renders),
+        )
         self.client.complete_success(job_id, renders)
