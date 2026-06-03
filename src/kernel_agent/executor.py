@@ -204,11 +204,15 @@ def execute_plan(
     log_path = work_dir / "_outputs.json"
     plan_json = json.dumps(plan)
 
-    # El path al kernel_scripts del propio paquete del agent
-    scripts_src = str(Path(__file__).resolve().parent.parent / "kernel_scripts")
-    # Sube un nivel desde kernel_agent/ a src/, luego kernel_scripts/
-    if not Path(scripts_src).exists():
-        scripts_src = str(Path(__file__).resolve().parent.parent)
+    # sys.path debe contener el PADRE de kernel_scripts/ (no la carpeta misma)
+    # para que `from kernel_scripts.X import Y` lo encuentre como paquete.
+    # __file__ = src/kernel_agent/executor.py → parent.parent = src/
+    scripts_src = str(Path(__file__).resolve().parent.parent)
+    if not (Path(scripts_src) / "kernel_scripts" / "__init__.py").exists():
+        raise RuntimeError(
+            f"kernel_scripts package not found under {scripts_src}. "
+            "Reinstala el agent con `pip install -e .` desde la raíz del repo."
+        )
 
     script_path.write_text(_runner_script(plan_json, str(log_path), scripts_src), encoding="utf-8")
 
