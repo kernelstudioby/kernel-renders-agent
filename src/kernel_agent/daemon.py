@@ -89,6 +89,7 @@ class AgentDaemon:
                 plan=plan,
                 blender_bin=self.cfg.blender_bin,
                 on_step_done=_on_step,
+                output_dir=self.cfg.output_dir,
             )
         except Exception as e:  # noqa: BLE001
             log.exception("Excepción ejecutando plan: %s", e)

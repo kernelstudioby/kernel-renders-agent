@@ -175,11 +175,32 @@ main()
 """
 
 
+def _expand_placeholders(plan: list[dict], output_dir: str) -> list[dict]:
+    """Reemplaza {OUTPUT_DIR} en los args del plan con el output_dir local.
+
+    La UI manda paths con {OUTPUT_DIR} en lugar de un path absoluto, así el
+    plan es portable entre máquinas (cada agent expande con su config local).
+    """
+    if not output_dir:
+        return plan
+    out: list[dict] = []
+    for step in plan:
+        new_args = {}
+        for k, v in (step.get("args") or {}).items():
+            if isinstance(v, str) and "{OUTPUT_DIR}" in v:
+                new_args[k] = v.replace("{OUTPUT_DIR}", output_dir)
+            else:
+                new_args[k] = v
+        out.append({**step, "args": new_args})
+    return out
+
+
 def execute_plan(
     plan: list[dict],
     blender_bin: str,
     work_dir: Path | None = None,
     on_step_done: callable | None = None,
+    output_dir: str = "",
 ) -> ExecuteResult:
     """Ejecuta el plan completo lanzando Blender headless.
 
@@ -194,6 +215,9 @@ def execute_plan(
 
     work_dir = work_dir or Path(tempfile.mkdtemp(prefix="kernel-agent-"))
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Expandir {OUTPUT_DIR} con el output_dir configurado del agent
+    plan = _expand_placeholders(plan, output_dir)
 
     # Descarga URLs de assets (de Supabase Storage) a tempfiles antes de
     # generar el script de Blender, que asume rutas locales.
