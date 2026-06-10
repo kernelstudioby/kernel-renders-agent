@@ -167,11 +167,19 @@ def main():
             break
 
     log_path.write_text(json.dumps(log))
-    if log["failed_step"]:
-        sys.exit(1)
+    return 1 if log["failed_step"] else 0
 
 
-main()
+import os as _os
+_exit_code = main()
+# CRÍTICO: usar os._exit() en lugar de sys.exit() para forzar terminación
+# inmediata del proceso de Blender. sys.exit() respeta threads daemon
+# pendientes (denoiser async / OptiX cleanup / compositor) que pueden
+# bloquear el exit indefinidamente después de que el .exr ya se escribió.
+# Síntoma sin esto: el archivo aparece en disco pero el subprocess.wait()
+# del agent nunca retorna.
+print(f"[runner] exit {{_exit_code}} — forzando terminación", flush=True)
+_os._exit(_exit_code)
 """
 
 

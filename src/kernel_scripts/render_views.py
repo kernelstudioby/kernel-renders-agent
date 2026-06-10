@@ -144,6 +144,29 @@ def run_render_one_view(
                 break
             except TypeError:
                 continue
+
+        # Deshabilitar workflows que dejan threads/async pendientes después
+        # de bpy.ops.render.render() y bloquean el exit de Blender (síntoma:
+        # el .exr aparece en disco pero el proceso no termina). El compositor
+        # con denoise nodes y el multiview son los culpables más comunes.
+        for attr, val in (
+            ("use_multiview", False),
+            ("use_compositing", False),
+        ):
+            try:
+                setattr(blender_scene.render, attr, val)
+            except AttributeError:
+                pass
+        try:
+            blender_scene.use_nodes = False
+        except AttributeError:
+            pass
+        try:
+            for v in blender_scene.render.views:
+                v.use = v.name in ("left", "")
+        except AttributeError:
+            pass
+
         # Samples: override opcional, default respeta el .blend
         if samples is not None:
             if normalized_engine == "CYCLES":
