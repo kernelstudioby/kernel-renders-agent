@@ -244,17 +244,23 @@ def execute_plan(
     cmd = [blender_bin, "--background", "--python", str(script_path), "--python-exit-code", "1"]
 
     stdout_lines: list[str] = []
-    stderr_lines: list[str] = []
 
+    # CRÍTICO: fusionar stderr en stdout. Si stderr queda como PIPE separado
+    # y NO se drena en paralelo, su buffer (~64 KB) se llena con renders
+    # grandes (EXR multilayer + cryptomatte + denoise data emiten cientos
+    # de KB de stderr) y Blender se BLOQUEA escribiendo, sin poder salir.
+    # Síntoma: el .exr queda escrito en disco pero el daemon piensa que
+    # Blender sigue corriendo indefinidamente.
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
     )
 
-    # Lee stdout línea por línea para detectar "[step N/M]" y disparar callback
+    # Lee stdout (que incluye stderr fusionado) línea por línea para detectar
+    # "[step N/M]" y disparar callback.
     assert proc.stdout is not None
     total_steps = len(plan)
     last_step_reported = -1
@@ -273,12 +279,10 @@ def execute_plan(
             except (ValueError, IndexError):
                 pass
     proc.wait()
-    assert proc.stderr is not None
-    stderr_lines = proc.stderr.read().splitlines()
 
     duration = time.time() - start
     stdout = "".join(stdout_lines)
-    stderr = "\n".join(stderr_lines)
+    stderr = ""  # stderr fusionado en stdout, ya no se separa
 
     # Parse del log JSON
     outputs: list[str] = []
