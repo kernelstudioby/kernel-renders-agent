@@ -58,6 +58,9 @@ def upload_render(
 ) -> UploadResult:
     """Sube un PNG a Supabase Storage via signed URL.
 
+    Solo PNG. Los .exr quedan en disco local del agent (post-prod) — el daemon
+    los filtra antes de llamar esta función.
+
     Args:
         local_path: path al PNG en disco
         job_id: id del job

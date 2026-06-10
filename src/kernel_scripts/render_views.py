@@ -11,6 +11,20 @@ from pathlib import Path
 from typing import Any
 
 
+_FORMAT_ALIASES = {
+    "PNG": "PNG",
+    "EXR": "OPEN_EXR",
+    "OPEN_EXR": "OPEN_EXR",
+    "EXR_MULTILAYER": "OPEN_EXR_MULTILAYER",
+    "OPEN_EXR_MULTILAYER": "OPEN_EXR_MULTILAYER",
+}
+_FORMAT_EXT = {
+    "PNG": ".png",
+    "OPEN_EXR": ".exr",
+    "OPEN_EXR_MULTILAYER": ".exr",
+}
+
+
 def run_render_one_view(
     *,
     scene: str,
@@ -20,6 +34,7 @@ def run_render_one_view(
     samples: int | None = None,
     resolution_x: int | None = None,
     resolution_y: int | None = None,
+    output_format: str = "PNG",
 ) -> dict[str, Any]:
     """Renderiza UNA cámara de la escena.
 
@@ -30,11 +45,13 @@ def run_render_one_view(
 
     Args:
         scene: Ruta al .blend.
-        output_path: Ruta absoluta del PNG de salida.
+        output_path: Ruta absoluta de salida.
         camera_name: Override de cámara. Si None, usa la activa del .blend.
         engine: Override de engine ('CYCLES', 'BLENDER_EEVEE'). Si None, respeta el .blend.
         samples: Override de samples. Si None, respeta el .blend.
         resolution_x, resolution_y: Override de resolución. Si None, respeta el .blend.
+        output_format: 'PNG' (default), 'EXR' (single layer), 'EXR_MULTILAYER'
+            (todos los passes). Para EXR Beyond/Moy lo usa en post-prod.
 
     Returns:
         dict con output_path, duration, success.
@@ -43,7 +60,21 @@ def run_render_one_view(
 
     import bpy  # type: ignore[import-not-found]
 
+    normalized_format = _FORMAT_ALIASES.get(output_format.upper())
+    if normalized_format is None:
+        raise ValueError(
+            f"output_format '{output_format}' no soportado. "
+            f"Opciones: {list(_FORMAT_ALIASES.keys())}"
+        )
+    expected_ext = _FORMAT_EXT[normalized_format]
     output = Path(output_path)
+    if output.suffix.lower() != expected_ext:
+        # Reescribir la extensión para que case con el formato.
+        output = output.with_suffix(expected_ext)
+        print(
+            f"[render setup] output_path extension reescrita a {expected_ext} → {output}",
+            flush=True,
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
 
     # NOTA: no abrimos el .blend. Escena ya cargada por el executor.
@@ -96,6 +127,65 @@ def run_render_one_view(
 
     engine = normalized_engine  # para el dict de retorno
 
+    # ===== RAMA EXR =====
+    # Cuando el usuario pide EXR (single o multilayer), saltamos toda la
+    # lógica de workaround para PNG y respetamos la escena tal cual.
+    if normalized_format in ("OPEN_EXR", "OPEN_EXR_MULTILAYER"):
+        img_settings = blender_scene.render.image_settings
+        img_settings.file_format = normalized_format
+        try:
+            img_settings.color_depth = "32"  # EXR usa float HDR
+        except TypeError:
+            pass
+        # EXR soporta RGBA por default; si la escena lo bloquea, RGB.
+        for mode in ("RGBA", "RGB"):
+            try:
+                img_settings.color_mode = mode
+                break
+            except TypeError:
+                continue
+        # Samples: override opcional, default respeta el .blend
+        if samples is not None:
+            if normalized_engine == "CYCLES":
+                blender_scene.cycles.samples = samples
+            elif normalized_engine == "BLENDER_EEVEE":
+                try:
+                    blender_scene.eevee.taa_render_samples = samples
+                except AttributeError:
+                    pass
+        try:
+            blender_scene.render.film_transparent = True
+        except AttributeError:
+            pass
+
+        blender_scene.render.filepath = str(output)
+        print(
+            f"[render EXR] file_format={normalized_format} → {output}",
+            flush=True,
+        )
+        start_ts = _time.time()
+        bpy.ops.render.render(write_still=True)
+        duration_ts = _time.time() - start_ts
+
+        if not output.exists() or output.stat().st_size == 0:
+            raise RuntimeError(f"EXR render terminó pero archivo inválido: {output}")
+        print(
+            f"[render EXR] OK ({output.stat().st_size // 1024} KB)",
+            flush=True,
+        )
+        return {
+            "output_path": str(output),
+            "output_format": normalized_format,
+            "camera": blender_scene.camera.name if blender_scene.camera else None,
+            "engine": engine,
+            "samples": samples,
+            "resolution": (resolution_x, resolution_y),
+            "duration_seconds": round(duration_ts, 2),
+            "file_size_bytes": output.stat().st_size,
+            "success": True,
+        }
+
+    # ===== RAMA PNG (default — incluye workaround si la escena lockea EXR_MULTILAYER) =====
     # Deshabilitar todo lo que restrinja file formats. Múltiples settings
     # pueden forzar OPEN_EXR_MULTILAYER (común en escenas con multiview
     # tipo Coca o pipelines con compositor multi-pass).
@@ -551,6 +641,7 @@ def run_render_all_cameras(
     samples: int | None = None,
     resolution_x: int | None = None,
     resolution_y: int | None = None,
+    output_format: str = "PNG",
 ) -> dict[str, Any]:
     """Renderiza TODAS las cámaras visibles de la escena en orden.
 
@@ -578,11 +669,15 @@ def run_render_all_cameras(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Extensión según formato
+    fmt_norm = _FORMAT_ALIASES.get(output_format.upper(), "PNG")
+    ext = _FORMAT_EXT[fmt_norm]
+
     results = []
     for cam in cameras:
         # Sanitizar el nombre de cámara para filesystem
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in cam.name)
-        output_path = str(out_dir / f"{prefix}-{safe_name}.png")
+        output_path = str(out_dir / f"{prefix}-{safe_name}{ext}")
         print(f"[render_all] Cámara '{cam.name}' → {output_path}", flush=True)
         res = run_render_one_view(
             scene=scene,
@@ -592,6 +687,7 @@ def run_render_all_cameras(
             samples=samples,
             resolution_x=resolution_x,
             resolution_y=resolution_y,
+            output_format=output_format,
         )
         results.append(
             {"camera": cam.name, "output_path": output_path, "duration_seconds": res.get("duration_seconds")}
@@ -620,6 +716,7 @@ def run_render_rotations(
     samples: int | None = None,
     resolution_x: int | None = None,
     resolution_y: int | None = None,
+    output_format: str = "PNG",
 ) -> dict[str, Any]:
     """Renderiza la botella desde N ángulos rotando la CÁMARA alrededor del pivote.
 
@@ -709,6 +806,9 @@ def run_render_rotations(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    fmt_norm = _FORMAT_ALIASES.get(output_format.upper(), "PNG")
+    ext = _FORMAT_EXT[fmt_norm]
+
     results = []
     try:
         for i in range(num_rotations):
@@ -731,7 +831,7 @@ def run_render_rotations(
             # Forzar update del depsgraph para que matrix_world refleje los cambios
             bpy.context.view_layer.update()
 
-            output_path = str(out_dir / f"{prefix}-{angle_deg:03d}deg.png")
+            output_path = str(out_dir / f"{prefix}-{angle_deg:03d}deg{ext}")
             print(
                 f"[render_rot] Rotación {i+1}/{num_rotations}: cámara a {angle_deg}° "
                 f"loc={tuple(round(v,2) for v in cam.location)} "
@@ -746,6 +846,7 @@ def run_render_rotations(
                 samples=samples,
                 resolution_x=resolution_x,
                 resolution_y=resolution_y,
+                output_format=output_format,
             )
             results.append(
                 {
@@ -776,7 +877,12 @@ render_rotations = run_render_rotations
 
 TOOL_SCHEMA_ONE = {
     "name": "render_one_view",
-    "description": "Renderiza UNA cámara específica. Para PoC; las 7 vistas vienen en Fase 3.",
+    "description": (
+        "Renderiza UNA cámara específica. "
+        "Default output_format=PNG (preview en browser, delivery cliente). "
+        "Usar output_format=EXR cuando el usuario pida output para post-producción "
+        "(Nuke/Fusion/After Effects), color grading HDR, archival, o lo nombre explícitamente."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
@@ -790,6 +896,11 @@ TOOL_SCHEMA_ONE = {
             "samples": {"type": "integer"},
             "resolution_x": {"type": "integer"},
             "resolution_y": {"type": "integer"},
+            "output_format": {
+                "type": "string",
+                "enum": ["PNG", "EXR", "EXR_MULTILAYER"],
+                "description": "PNG default. EXR para post-prod (single layer 32-bit HDR). EXR_MULTILAYER guarda passes (diffuse, specular, depth, AOVs) — útil para compositing avanzado.",
+            },
         },
         "required": ["scene", "output_path"],
     },

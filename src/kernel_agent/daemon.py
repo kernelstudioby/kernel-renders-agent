@@ -103,19 +103,38 @@ class AgentDaemon:
             self.client.complete_failure(job_id, err_msg)
             return
 
-        # Éxito: subir outputs (si los hay) a Supabase Storage y reportar
+        # Éxito: separar outputs en uploadables (PNG/JPG/WEBP) y locales (EXR).
+        # Los EXR se quedan en disco del agent — workflow de post-prod local.
+        UPLOADABLE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
         renders = []
         upload_failures = 0
+        upload_attempted = 0
+        local_artifacts: list[str] = []
+
         for output in exec_result.outputs:
             p = Path(output)
             if not p.exists():
                 continue
+            ext = p.suffix.lower()
             view_name = p.stem
+
+            if ext not in UPLOADABLE_EXTS:
+                # EXR u otro formato local. No subir; reportar como artefacto local.
+                local_artifacts.append(str(p))
+                log.info(
+                    "  📁 local %s (%s, %d KB) — no se sube",
+                    view_name,
+                    ext,
+                    p.stat().st_size // 1024,
+                )
+                continue
+
+            upload_attempted += 1
             try:
                 uploaded = upload_render(p, job_id, view_name, self.client)
                 renders.append({
                     "view": view_name,
-                    "format": p.suffix.lstrip(".").lower() or "png",
+                    "format": ext.lstrip("."),
                     "storage_path": uploaded.storage_path,
                     "public_url": uploaded.public_url,
                     "size_bytes": uploaded.size_bytes,
@@ -127,13 +146,22 @@ class AgentDaemon:
                 upload_failures += 1
                 log.error("Upload de %s falló: %s", view_name, e)
 
-        # Falla solo si: el plan produjo outputs pero TODOS fallaron al subir.
-        # Si el plan no produjo outputs (ej. solo inspect_scene), es completed sin renders.
-        if exec_result.outputs and not renders:
-            log.warning(
-                "Job %s produjo %d outputs pero ninguno subió.",
+        if local_artifacts:
+            log.info(
+                "Job %s · %d artefacto(s) local(es) (EXR/etc.) en %s",
                 job_id,
-                len(exec_result.outputs),
+                len(local_artifacts),
+                self.cfg.output_dir or "(?)",
+            )
+
+        # Falla solo si: el plan INTENTÓ subir outputs y todos fallaron.
+        # Si el plan no produjo nada uploadable (solo EXR, solo inspect_scene),
+        # es completed sin renders.
+        if upload_attempted > 0 and not renders:
+            log.warning(
+                "Job %s intentó subir %d outputs pero todos fallaron.",
+                job_id,
+                upload_attempted,
             )
             self.client.complete_failure(
                 job_id, f"all {upload_failures} uploads failed"
@@ -141,9 +169,10 @@ class AgentDaemon:
             return
 
         log.info(
-            "Job %s OK · %ss · %d renders",
+            "Job %s OK · %ss · %d renders subidos · %d locales",
             job_id,
             exec_result.duration_seconds,
             len(renders),
+            len(local_artifacts),
         )
         self.client.complete_success(job_id, renders)
