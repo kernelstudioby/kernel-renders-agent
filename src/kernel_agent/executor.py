@@ -357,6 +357,6 @@ def execute_plan(
         outputs=outputs,
         step_results=step_results,
         steps_executed=steps_executed,
-        steps_total=total_steps,
+        steps_total=len(plan),
         failed_step=failed_step,
     )
