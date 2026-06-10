@@ -155,7 +155,7 @@ def run_inspect_scene(
     # Resolución actual
     resolution = (s.render.resolution_x, s.render.resolution_y)
 
-    return {
+    result = {
         "scene_name": s.name,
         "render_engine": s.render.engine,
         "resolution": list(resolution),
@@ -176,6 +176,15 @@ def run_inspect_scene(
         "total_polygons": total_polygons,
         "success": True,
     }
+
+    # Dump del JSON a stdout para que Moy lo vea directo en la consola del
+    # daemon. Marker explícito para que sea fácil de localizar y copiar.
+    import json as _json
+    print("\n[inspect_scene][BEGIN_JSON]", flush=True)
+    print(_json.dumps(result, indent=2, default=str), flush=True)
+    print("[inspect_scene][END_JSON]\n", flush=True)
+
+    return result
 
 
 TOOL_SCHEMA = {
