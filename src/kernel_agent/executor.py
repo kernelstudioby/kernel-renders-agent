@@ -253,12 +253,8 @@ def execute_plan(
 
     stdout_lines: list[str] = []
 
-    # CRÍTICO: fusionar stderr en stdout. Si stderr queda como PIPE separado
-    # y NO se drena en paralelo, su buffer (~64 KB) se llena con renders
-    # grandes (EXR multilayer + cryptomatte + denoise data emiten cientos
-    # de KB de stderr) y Blender se BLOQUEA escribiendo, sin poder salir.
-    # Síntoma: el .exr queda escrito en disco pero el daemon piensa que
-    # Blender sigue corriendo indefinidamente.
+    # Fusionar stderr en stdout para evitar pipe-buffer deadlock con renders
+    # que escriben mucho a stderr (EXR multilayer + cryptomatte + denoise).
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -267,26 +263,71 @@ def execute_plan(
         bufsize=1,
     )
 
-    # Lee stdout (que incluye stderr fusionado) línea por línea para detectar
-    # "[step N/M]" y disparar callback.
+    # Drenar stdout en un thread para no bloquear si Blender escribe mucho.
+    # CRÍTICO: NO esperamos a que cierre el pipe — Blender en Windows deja
+    # procesos hijos (denoiser/OptiX) que heredan el FD y lo mantienen abierto
+    # incluso después de que Blender mismo termine. El thread sigue drenando
+    # mientras el daemon vigila el log_path.
+    import threading
     assert proc.stdout is not None
-    total_steps = len(plan)
-    last_step_reported = -1
-    for line in proc.stdout:
-        stdout_lines.append(line)
-        if on_step_done and "[step " in line:
+    last_step_reported = [-1]  # mutable para el closure
+
+    def _drain_stdout():
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            if on_step_done and "[step " in line:
+                try:
+                    inside = line.split("[step ", 1)[1].split("]", 1)[0]
+                    cur_str, total_str = inside.split("/")
+                    cur = int(cur_str)
+                    if cur > last_step_reported[0]:
+                        last_step_reported[0] = cur
+                        msg = line.split("]", 1)[1].strip() if "]" in line else ""
+                        try:
+                            on_step_done(cur, int(total_str), msg)
+                        except Exception:  # noqa: BLE001
+                            pass
+                except (ValueError, IndexError):
+                    pass
+
+    drain_thread = threading.Thread(target=_drain_stdout, daemon=True, name="exec-drain")
+    drain_thread.start()
+
+    # En lugar de esperar proc.wait() (que puede colgarse por pipes huérfanos),
+    # vigilamos log_path: el runner lo escribe justo antes de hacer os._exit().
+    # En cuanto exista, sabemos que la lógica del plan terminó.
+    LOG_POLL_INTERVAL_S = 0.5
+    MAX_RUNTIME_S = 4 * 60 * 60  # 4h hard cap como red de seguridad
+    while True:
+        if log_path.exists() and log_path.stat().st_size > 0:
+            break
+        rc = proc.poll()
+        if rc is not None:
+            # Blender terminó antes de escribir el log (crash temprano).
+            break
+        if time.time() - start > MAX_RUNTIME_S:
             try:
-                # "[step 1/4] swap_label" → extrae 1 y 4
-                inside = line.split("[step ", 1)[1].split("]", 1)[0]
-                cur_str, total_str = inside.split("/")
-                cur = int(cur_str)
-                if cur > last_step_reported:
-                    last_step_reported = cur
-                    msg = line.split("]", 1)[1].strip() if "]" in line else ""
-                    on_step_done(cur, int(total_str), msg)
-            except (ValueError, IndexError):
+                proc.kill()
+            except Exception:  # noqa: BLE001
                 pass
-    proc.wait()
+            break
+        time.sleep(LOG_POLL_INTERVAL_S)
+
+    # Log ya escrito (o crash). Dale 2s a Blender para que termine limpio;
+    # si sigue vivo (procesos hijos), lo matamos sin contemplaciones — su
+    # output ya está en disco y no podemos seguir esperando.
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Esperar al thread de drenado (max 2s; si sigue, lo abandonamos)
+    drain_thread.join(timeout=2)
 
     duration = time.time() - start
     stdout = "".join(stdout_lines)
