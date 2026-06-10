@@ -177,12 +177,22 @@ def run_inspect_scene(
         "success": True,
     }
 
-    # Dump del JSON a stdout para que Moy lo vea directo en la consola del
-    # daemon. Marker explícito para que sea fácil de localizar y copiar.
+    # Dump del JSON a stdout (capturado por el daemon) Y a un archivo en
+    # Downloads del usuario para que sea fácil de abrir y copiar.
     import json as _json
+    from pathlib import Path as _Path
     print("\n[inspect_scene][BEGIN_JSON]", flush=True)
     print(_json.dumps(result, indent=2, default=str), flush=True)
     print("[inspect_scene][END_JSON]\n", flush=True)
+
+    try:
+        downloads = _Path.home() / "Downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        out_file = downloads / "kernel-inspect.json"
+        out_file.write_text(_json.dumps(result, indent=2, default=str), encoding="utf-8")
+        print(f"[inspect_scene] JSON escrito a: {out_file}", flush=True)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[inspect_scene] no se pudo escribir a Downloads: {_e}", flush=True)
 
     return result
 
