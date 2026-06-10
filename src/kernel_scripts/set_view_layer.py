@@ -76,17 +76,22 @@ def run_set_active_view_layer(
     except (AttributeError, TypeError, ReferenceError):
         pass
 
-    # 4. Aplicar la visibilidad del view_layer a nivel de Collection.
-    # Por qué: render_views.py a veces crea una "fresh scene" para sortear
-    # locks de file_format. En esa fresh scene los layer_collections del
-    # original no existen — sus reglas exclude/include se perderían y se
-    # renderizaría TODO (dry + sweaty). Para que la visibilidad sobreviva
-    # ese reroute, copiamos `exclude` → `collection.hide_render` (global,
-    # scene-wide, persiste a través de scenes).
+    # 4. Aplicar la visibilidad del view_layer a nivel de Collection Y de
+    # Object. Por qué dos niveles:
+    #   - collection.hide_render: scene-wide, persiste si la scene se reusa.
+    #   - object.hide_render: propiedad del objeto. CRÍTICO: render_views.py
+    #     a veces crea una "fresh scene" para sortear locks de file_format.
+    #     En esa fresh scene los layer_collections del original no existen,
+    #     y los objetos se linkean directo a la fresh scene perdiendo la
+    #     visibilidad de collection. Pero obj.hide_render viaja con el
+    #     objeto en el linkeo. Por eso marcamos AMBOS.
     collections_hidden = []
     collections_shown = []
+    objects_hidden_count = 0
+    objects_shown_count = 0
 
     def _walk_layer_collections(lc):
+        nonlocal objects_hidden_count, objects_shown_count
         try:
             target_excluded = bool(lc.exclude)
         except AttributeError:
@@ -98,6 +103,20 @@ def run_set_active_view_layer(
                 collections_hidden.append(coll.name)
             else:
                 collections_shown.append(coll.name)
+        except AttributeError:
+            pass
+        # Propagar a TODOS los objetos del collection (incluye nested
+        # collections recursivamente vía all_objects)
+        try:
+            for obj in coll.all_objects:
+                try:
+                    obj.hide_render = target_excluded
+                    if target_excluded:
+                        objects_hidden_count += 1
+                    else:
+                        objects_shown_count += 1
+                except AttributeError:
+                    pass
         except AttributeError:
             pass
         for child in lc.children:
@@ -120,6 +139,8 @@ def run_set_active_view_layer(
         "disabled_others": disabled,
         "collections_hidden": collections_hidden,
         "collections_shown": collections_shown,
+        "objects_hidden_count": objects_hidden_count,
+        "objects_shown_count": objects_shown_count,
         "success": True,
     }
 
