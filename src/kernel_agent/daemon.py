@@ -6,6 +6,7 @@ Maneja Ctrl+C limpiamente. Reintenta errores de red con backoff.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -16,6 +17,46 @@ from .library_scan import scan_blend_files
 from .storage import upload_render
 
 log = logging.getLogger("kernel-agent.daemon")
+
+
+class _Heartbeat:
+    """Manda poll() en background mientras un job está corriendo.
+
+    Esto actualiza `agent.last_seen_at` en Supabase para que la UI no
+    declare "Sin señal del agent" durante renders largos (EXR multilayer,
+    six-packs) que pueden tomar 10-60 min en un solo step.
+    """
+
+    def __init__(self, client: ApiClient, cfg: AgentConfig, interval: int = 5):
+        self.client = client
+        self.cfg = cfg
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="heartbeat")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.interval + 2)
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                # Solo heartbeat — no procesamos el job si llega uno nuevo aquí.
+                self.client.poll(
+                    gpu_info=self.cfg.gpu_info or None,
+                    blender_version=self.cfg.blender_version or None,
+                    library_scenes=None,  # no contaminar cada heartbeat con escaneo de disco
+                )
+            except Exception:  # noqa: BLE001
+                # No fallar el render por error de telemetría. Silencioso a propósito.
+                pass
 
 
 class AgentDaemon:
@@ -84,6 +125,8 @@ class AgentDaemon:
             except ApiError:
                 pass  # no fallar el job por error de telemetría
 
+        heartbeat = _Heartbeat(self.client, self.cfg, interval=self.cfg.poll_interval_seconds)
+        heartbeat.start()
         try:
             exec_result = execute_plan(
                 plan=plan,
@@ -95,6 +138,8 @@ class AgentDaemon:
             log.exception("Excepción ejecutando plan: %s", e)
             self.client.complete_failure(job_id, f"executor exception: {e}")
             return
+        finally:
+            heartbeat.stop()
 
         if not exec_result.success:
             failure = exec_result.failed_step or {"error": "render failed without details"}

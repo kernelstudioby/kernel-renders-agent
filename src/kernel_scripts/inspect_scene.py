@@ -56,8 +56,74 @@ def run_inspect_scene(
             info["has_image_texture"] = has_image_texture
         materials_info.append(info)
 
-    # View layers
-    view_layers = [{"name": vl.name, "use": vl.use} for vl in s.view_layers]
+    # View layers — info detallada para entender por qué difieren entre sí
+    # (dry vs sweaty, etc). Reporta exclude/holdout/indirect_only por
+    # layer_collection, material_override, samples, y cualquier override
+    # que pueda explicar diferencias visibles entre view_layers.
+    view_layers = []
+    for vl in s.view_layers:
+        # Recorrer el árbol de layer_collections del view_layer
+        excluded_collections: list[str] = []
+        hidden_collections: list[str] = []
+        holdout_collections: list[str] = []
+        indirect_only_collections: list[str] = []
+
+        def _walk(lc):
+            try:
+                if getattr(lc, "exclude", False):
+                    excluded_collections.append(lc.collection.name)
+                if getattr(lc, "hide_viewport", False):
+                    hidden_collections.append(lc.collection.name)
+                if getattr(lc, "holdout", False):
+                    holdout_collections.append(lc.collection.name)
+                if getattr(lc, "indirect_only", False):
+                    indirect_only_collections.append(lc.collection.name)
+            except AttributeError:
+                pass
+            for child in lc.children:
+                _walk(child)
+
+        try:
+            for child in vl.layer_collection.children:
+                _walk(child)
+        except AttributeError:
+            pass
+
+        # Material override (Blender 3.x+: vl.material_override)
+        mat_override = None
+        try:
+            if vl.material_override:
+                mat_override = vl.material_override.name
+        except AttributeError:
+            pass
+
+        # Cycles overrides per view_layer
+        cycles_samples_override = None
+        try:
+            if vl.cycles.use_layer_samples != "USE":
+                cycles_samples_override = vl.cycles.samples
+        except AttributeError:
+            pass
+
+        # Objects hidden_render globalmente (no por view_layer pero útil saber
+        # qué hay marcado para no renderizar). Solo nombres distintos por
+        # view_layer son útiles, pero como bpy no expone per-view_layer hide_render
+        # directamente, listamos los globales.
+        objects_hidden_render = [
+            o.name for o in s.objects if getattr(o, "hide_render", False)
+        ][:30]
+
+        view_layers.append({
+            "name": vl.name,
+            "use": vl.use,
+            "excluded_collections": excluded_collections,
+            "hidden_collections": hidden_collections,
+            "holdout_collections": holdout_collections,
+            "indirect_only_collections": indirect_only_collections,
+            "material_override": mat_override,
+            "cycles_samples_override": cycles_samples_override,
+            "objects_hidden_render_global": objects_hidden_render,
+        })
 
     # Lights
     lights = [
