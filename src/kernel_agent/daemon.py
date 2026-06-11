@@ -145,6 +145,22 @@ class AgentDaemon:
         finally:
             heartbeat.stop()
 
+        # Mostrar líneas de diagnóstico de Blender en la consola del daemon
+        # (especialmente útiles para Moy: qué cámara se usó, qué view_layer,
+        # qué workaround de render). Solo emitimos las marcadas con prefijos
+        # para no spammear con todas las líneas de Cycles (samples, BVH, etc.)
+        _DIAG_PREFIXES = (
+            "[render setup]",
+            "[render EXR]",
+            "[render fresh]",
+            "[setup]",
+            "[step ",
+        )
+        for line in exec_result.stdout.splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(p) for p in _DIAG_PREFIXES):
+                log.info("  %s", stripped)
+
         if not exec_result.success:
             failure = exec_result.failed_step or {"error": "render failed without details"}
             err_msg = f"{failure.get('tool', '?')}: {failure.get('error', 'unknown')}"
