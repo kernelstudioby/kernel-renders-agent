@@ -89,43 +89,69 @@ def run_set_active_view_layer(
     collections_shown = []
     objects_hidden_count = 0
     objects_shown_count = 0
+    objects_errored: list[str] = []
 
-    def _walk_layer_collections(lc):
+    def _set_obj_hide(obj, hide: bool) -> None:
+        """Set hide_render con manejo robusto de cualquier excepción.
+
+        Antes el loop era frágil: una sola excepción no-AttributeError en un
+        obj rompía la iteración y los siguientes objs no se procesaban. Ese
+        bug causaba que TERMO_2.5L_SIMUL.001 quedara sin ocultar en el .blend
+        del multipack, y el render mostraba el shrink wrap de las dos variants
+        superpuesto.
+        """
         nonlocal objects_hidden_count, objects_shown_count
         try:
-            target_excluded = bool(lc.exclude)
+            obj.hide_render = hide
+            if hide:
+                objects_hidden_count += 1
+            else:
+                objects_shown_count += 1
+        except Exception as _e:  # noqa: BLE001
+            objects_errored.append(f"{getattr(obj, 'name', '?')}: {_e}")
+
+    def _walk_layer_collections(lc, parent_excluded: bool = False):
+        try:
+            this_excluded = bool(lc.exclude)
         except AttributeError:
-            target_excluded = False
+            this_excluded = False
+        # Heredar exclude del padre: si la collection padre está excluida,
+        # los hijos efectivamente no rinden aunque su propio exclude sea False.
+        effective_excluded = parent_excluded or this_excluded
         coll = lc.collection
         try:
-            coll.hide_render = target_excluded
-            if target_excluded:
+            coll.hide_render = effective_excluded
+            if effective_excluded:
                 collections_hidden.append(coll.name)
             else:
                 collections_shown.append(coll.name)
         except AttributeError:
             pass
-        # Propagar a TODOS los objetos del collection (incluye nested
-        # collections recursivamente vía all_objects)
-        try:
-            for obj in coll.all_objects:
-                try:
-                    obj.hide_render = target_excluded
-                    if target_excluded:
-                        objects_hidden_count += 1
-                    else:
-                        objects_shown_count += 1
-                except AttributeError:
-                    pass
-        except AttributeError:
-            pass
+        # Procesar AMBOS: objetos directos del collection (objects) y los de
+        # sus children (all_objects). En la práctica all_objects ya incluye
+        # los directos, pero iteramos ambos defensivamente y dedupeamos por
+        # id() para que un fallo en uno no se propague al otro.
+        seen_ids: set[int] = set()
+        for source in (coll.objects, coll.all_objects):
+            try:
+                obj_list = list(source)
+            except Exception:  # noqa: BLE001
+                continue
+            for obj in obj_list:
+                if obj is None:
+                    continue
+                oid = id(obj)
+                if oid in seen_ids:
+                    continue
+                seen_ids.add(oid)
+                _set_obj_hide(obj, effective_excluded)
         for child in lc.children:
-            _walk_layer_collections(child)
+            _walk_layer_collections(child, effective_excluded)
 
     try:
         root_lc = target_vl.layer_collection
         for child in root_lc.children:
-            _walk_layer_collections(child)
+            _walk_layer_collections(child, parent_excluded=False)
     except AttributeError:
         pass
 
@@ -141,6 +167,7 @@ def run_set_active_view_layer(
         "collections_shown": collections_shown,
         "objects_hidden_count": objects_hidden_count,
         "objects_shown_count": objects_shown_count,
+        "objects_errored": objects_errored,
         "success": True,
     }
 
