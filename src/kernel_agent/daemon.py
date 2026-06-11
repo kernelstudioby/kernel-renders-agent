@@ -140,7 +140,10 @@ class AgentDaemon:
             if is_psd_plan(plan):
                 # Job de PSD: no levanta Blender, ejecuta con psd-tools + Pillow
                 log.info("Job %s es PSD plan (no Blender)", job_id)
-                exec_result = execute_psd_plan(plan=plan, on_step=_on_step)
+                # Expandir {OUTPUT_DIR} con el output_dir local del agent
+                from .executor import _expand_placeholders
+                psd_plan = _expand_placeholders(plan, self.cfg.output_dir)
+                exec_result = execute_psd_plan(plan=psd_plan, on_step=_on_step)
             else:
                 exec_result = execute_plan(
                     plan=plan,
