@@ -26,6 +26,10 @@ class AgentConfig:
     blender_bin: str = ""
     library_dir: str = ""
     output_dir: str = ""
+    # Carpeta opcional con PSDs que el agent reporta a la plataforma para que
+    # se puedan exportar a multi-resolución desde la UI. Si está vacía, no se
+    # reporta nada y la sección Export Pack queda sin PSDs de este agent.
+    psds_dir: str = ""
     poll_interval_seconds: int = 5
     # Telemetría que se manda al server en cada poll
     gpu_info: dict = field(default_factory=dict)
@@ -65,6 +69,7 @@ def load_config() -> AgentConfig:
         "BLENDER_BIN": "blender_bin",
         "LIBRARY_DIR": "library_dir",
         "OUTPUT_DIR": "output_dir",
+        "PSDS_DIR": "psds_dir",
         "POLL_INTERVAL_SECONDS": "poll_interval_seconds",
     }
     for env_key, attr in env_map.items():

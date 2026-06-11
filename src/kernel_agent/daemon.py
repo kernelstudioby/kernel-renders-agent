@@ -14,6 +14,8 @@ from .api_client import ApiClient, ApiError
 from .config import AgentConfig
 from .executor import execute_plan
 from .library_scan import scan_blend_files_with_view_layers
+from .psd_executor import execute_psd_plan, is_psd_plan
+from .psd_scan import scan_psd_files
 from .storage import upload_render
 
 log = logging.getLogger("kernel-agent.daemon")
@@ -100,10 +102,12 @@ class AgentDaemon:
             self.cfg.output_dir,
             api_client=self.client,
         )
+        library_psds = scan_psd_files(self.cfg.psds_dir)
         result = self.client.poll(
             gpu_info=self.cfg.gpu_info or None,
             blender_version=self.cfg.blender_version or None,
             library_scenes=library_scenes,
+            library_psds=library_psds,
         )
         job = result.get("job")
         if not job:
@@ -133,12 +137,17 @@ class AgentDaemon:
         heartbeat = _Heartbeat(self.client, self.cfg, interval=self.cfg.poll_interval_seconds)
         heartbeat.start()
         try:
-            exec_result = execute_plan(
-                plan=plan,
-                blender_bin=self.cfg.blender_bin,
-                on_step_done=_on_step,
-                output_dir=self.cfg.output_dir,
-            )
+            if is_psd_plan(plan):
+                # Job de PSD: no levanta Blender, ejecuta con psd-tools + Pillow
+                log.info("Job %s es PSD plan (no Blender)", job_id)
+                exec_result = execute_psd_plan(plan=plan, on_step=_on_step)
+            else:
+                exec_result = execute_plan(
+                    plan=plan,
+                    blender_bin=self.cfg.blender_bin,
+                    on_step_done=_on_step,
+                    output_dir=self.cfg.output_dir,
+                )
         except Exception as e:  # noqa: BLE001
             log.exception("Excepción ejecutando plan: %s", e)
             self.client.complete_failure(job_id, f"executor exception: {e}")
