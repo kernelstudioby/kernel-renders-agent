@@ -78,15 +78,21 @@ def scan_blend_files_with_view_layers(
     if not scenes or not blender_bin:
         return scenes
     try:
-        from .scene_metadata import get_view_layers_for_scenes
-        vl_map = get_view_layers_for_scenes(scenes, blender_bin, output_dir)
+        from .scene_metadata import get_metadata_for_scenes
+        meta_map = get_metadata_for_scenes(scenes, blender_bin, output_dir)
     except Exception:  # noqa: BLE001
-        vl_map = {}
+        meta_map = {}
     thumb_map = _resolve_thumbnails(scenes, api_client) if api_client else {}
     enriched: list[dict] = []
     for s in scenes:
         path_key = str(Path(s["path"]).resolve())
-        item = {**s, "view_layers": vl_map.get(path_key, [])}
+        meta = meta_map.get(path_key, {})
+        item = {
+            **s,
+            "view_layers": meta.get("view_layers", []),
+            "cameras": meta.get("cameras", []),
+            "active_camera": meta.get("active_camera"),
+        }
         thumb_url = thumb_map.get(path_key)
         if thumb_url:
             item["thumbnail_url"] = thumb_url
