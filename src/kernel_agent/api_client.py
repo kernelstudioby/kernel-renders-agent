@@ -113,6 +113,28 @@ class ApiClient:
             json={"error": error[:2000]},  # cap length
         )
 
+    def upload_thumbnail(self, png_bytes: bytes, hash_hex: str) -> str | None:
+        """Sube el thumbnail extraído de un .blend; devuelve URL pública o None.
+
+        El backend usa el hash como nombre de archivo en Storage, así que
+        thumbnails idénticos (mismo PNG) se deduplican naturalmente entre
+        agents y escenas.
+        """
+        import base64
+        try:
+            resp = self._request(
+                "POST",
+                "/api/agent/thumbnail",
+                json={
+                    "hash": hash_hex,
+                    "png_base64": base64.b64encode(png_bytes).decode("ascii"),
+                },
+            )
+        except ApiError:
+            return None
+        url = resp.get("url")
+        return url if isinstance(url, str) else None
+
     def close(self) -> None:
         self._client.close()
 

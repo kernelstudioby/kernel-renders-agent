@@ -98,6 +98,7 @@ class AgentDaemon:
             self.cfg.library_dir,
             self.cfg.blender_bin,
             self.cfg.output_dir,
+            api_client=self.client,
         )
         result = self.client.poll(
             gpu_info=self.cfg.gpu_info or None,
