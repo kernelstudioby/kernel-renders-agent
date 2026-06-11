@@ -13,7 +13,7 @@ from pathlib import Path
 from .api_client import ApiClient, ApiError
 from .config import AgentConfig
 from .executor import execute_plan
-from .library_scan import scan_blend_files
+from .library_scan import scan_blend_files_with_view_layers
 from .storage import upload_render
 
 log = logging.getLogger("kernel-agent.daemon")
@@ -94,7 +94,11 @@ class AgentDaemon:
 
     def _tick(self) -> None:
         """Una iteración: poll + (si hay job) claim + execute + complete."""
-        library_scenes = scan_blend_files(self.cfg.library_dir)
+        library_scenes = scan_blend_files_with_view_layers(
+            self.cfg.library_dir,
+            self.cfg.blender_bin,
+            self.cfg.output_dir,
+        )
         result = self.client.poll(
             gpu_info=self.cfg.gpu_info or None,
             blender_version=self.cfg.blender_version or None,
