@@ -91,6 +91,12 @@ def run_set_active_view_layer(
     objects_shown_count = 0
     objects_errored: list[str] = []
 
+    # Tipos de objeto que NUNCA deben ocultarse por exclude de view_layer.
+    # Cámaras y luces son globales a la escena — si quedan ocultas, el render
+    # rompe ("no active camera") o queda oscuro. Tampoco ocultamos EMPTY
+    # (parents, rigging) porque puede romper jerarquías de animación.
+    _PROTECTED_OBJ_TYPES = {"CAMERA", "LIGHT", "LIGHT_PROBE", "EMPTY"}
+
     def _set_obj_hide(obj, hide: bool) -> None:
         """Set hide_render con manejo robusto de cualquier excepción.
 
@@ -99,9 +105,17 @@ def run_set_active_view_layer(
         bug causaba que TERMO_2.5L_SIMUL.001 quedara sin ocultar en el .blend
         del multipack, y el render mostraba el shrink wrap de las dos variants
         superpuesto.
+
+        Tampoco oculta cámaras / luces / probes / empties porque son globales
+        a la escena (Moy las usa cross-view-layer y romper su visibilidad
+        causaba que el render usara la cámara incorrecta).
         """
         nonlocal objects_hidden_count, objects_shown_count
         try:
+            if hide and getattr(obj, "type", None) in _PROTECTED_OBJ_TYPES:
+                # No ocultamos cámaras/luces aunque la collection esté excluida.
+                objects_shown_count += 1
+                return
             obj.hide_render = hide
             if hide:
                 objects_hidden_count += 1

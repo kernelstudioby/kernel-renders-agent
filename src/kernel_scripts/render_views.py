@@ -78,18 +78,29 @@ def run_render_one_view(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     # NOTA: no abrimos el .blend. Escena ya cargada por el executor.
-    # 1. Seleccionar cámara (override opcional)
+    # 1. Seleccionar cámara — respetar la activa del .blend salvo override.
     blender_scene = bpy.context.scene
+    all_cams = [o for o in bpy.data.objects if o.type == "CAMERA"]
+    print(
+        f"[render setup] Cámaras en escena: {[c.name for c in all_cams]}",
+        flush=True,
+    )
+    print(
+        f"[render setup] scene.camera (activa del .blend): "
+        f"{blender_scene.camera.name if blender_scene.camera else 'NONE'}",
+        flush=True,
+    )
     if camera_name:
         cam = bpy.data.objects.get(camera_name)
         if cam is None:
             raise ValueError(
                 f"Cámara '{camera_name}' no existe. "
-                f"Cámaras: {[o.name for o in bpy.data.objects if o.type == 'CAMERA']}"
+                f"Cámaras: {[c.name for c in all_cams]}"
             )
         if cam.type != "CAMERA":
             raise ValueError(f"Objeto '{camera_name}' no es una cámara (es '{cam.type}')")
         blender_scene.camera = cam
+        print(f"[render setup] OVERRIDE: usando cámara '{camera_name}'", flush=True)
     elif blender_scene.camera is None:
         # La escena no tiene activa; tomar la primera disponible
         first_cam = next((o for o in bpy.data.objects if o.type == "CAMERA"), None)
