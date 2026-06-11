@@ -80,22 +80,30 @@ def run_export_psd(
         if fmt == "jpeg":
             fmt = "jpg"
         width = int(spec.get("width", 0))
-        if width <= 0:
-            raise ValueError(f"width inválido en export '{name}': {width}")
-        height_raw = spec.get("height")
-        if height_raw is None:
-            height = round(width * src_h / src_w)
+        # width == -1 → mantener resolución nativa del PSD (no redimensiona)
+        if width == -1:
+            new_w, new_h = src_w, src_h
+            resized = composite
+            print(
+                f"[psd] {name} usa resolución original {src_w}x{src_h}",
+                flush=True,
+            )
         else:
-            height = int(height_raw)
-            if height <= 0:
-                raise ValueError(f"height inválido en export '{name}': {height}")
+            if width <= 0:
+                raise ValueError(f"width inválido en export '{name}': {width}")
+            height_raw = spec.get("height")
+            if height_raw is None:
+                height = round(width * src_h / src_w)
+            else:
+                height = int(height_raw)
+                if height <= 0:
+                    raise ValueError(f"height inválido en export '{name}': {height}")
+            # Redimensionar manteniendo aspect ratio dentro de WxH (fit inside)
+            scale = min(width / src_w, height / src_h)
+            new_w = max(1, round(src_w * scale))
+            new_h = max(1, round(src_h * scale))
+            resized = composite.resize((new_w, new_h), Image.LANCZOS)
         transparent = bool(spec.get("transparent", fmt != "jpg"))
-
-        # Redimensionar manteniendo aspect ratio dentro de WxH (fit inside)
-        scale = min(width / src_w, height / src_h)
-        new_w = max(1, round(src_w * scale))
-        new_h = max(1, round(src_h * scale))
-        resized = composite.resize((new_w, new_h), Image.LANCZOS)
 
         # Aplanar si no es transparente o si JPG
         if fmt == "jpg" or not transparent:

@@ -102,7 +102,7 @@ class AgentDaemon:
             self.cfg.output_dir,
             api_client=self.client,
         )
-        library_psds = scan_psd_files(self.cfg.psds_dir)
+        library_psds = scan_psd_files(self.cfg.psds_dir, api_client=self.client)
         result = self.client.poll(
             gpu_info=self.cfg.gpu_info or None,
             blender_version=self.cfg.blender_version or None,
