@@ -72,22 +72,34 @@ def upload_render(
     sha = _file_sha256(local_path)
     w, h = _image_dimensions(local_path)
 
+    # Determinar content-type según la extensión real del archivo
+    ext = local_path.suffix.lower()
+    content_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(ext, "image/png")
+    # Asegurar que el `view` que mandamos al server preserva la extensión
+    # correcta (antes hardcodeaba .png aunque el archivo fuera .jpg).
+    view_with_ext = view if "." in view else f"{view}{ext}"
+
     # 1. Pedir signed URL al server
     resp = api_client._request(
         "POST",
         f"/api/agent/upload-url/{job_id}",
-        json={"view": view, "content_type": "image/png"},
+        json={"view": view_with_ext, "content_type": content_type},
     )
     signed_url = resp["signed_url"]
     storage_path = resp["storage_path"]
     public_url = resp.get("public_url")
 
-    # 2. PUT al signed URL con el binario del PNG
+    # 2. PUT al signed URL con el binario
     with local_path.open("rb") as f:
         put_resp = httpx.put(
             signed_url,
             content=f.read(),
-            headers={"Content-Type": "image/png"},
+            headers={"Content-Type": content_type},
             timeout=timeout,
         )
     if put_resp.status_code >= 400:
