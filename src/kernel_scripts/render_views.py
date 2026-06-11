@@ -90,6 +90,29 @@ def run_render_one_view(
         f"{blender_scene.camera.name if blender_scene.camera else 'NONE'}",
         flush=True,
     )
+
+    # CRÍTICO: respetar el frame_current del .blend.
+    # Cuando un .blend tiene animación de cámara (Moy las usa para hero shots
+    # con keyframes en frames 3-4), el render headless arranca en frame 1 por
+    # default y la cámara queda en otra posición. Reproducir: scene multipack
+    # tiene keyframes con rot_x=90° en frame 1 (vista frontal) y rot_x=68° en
+    # frame 4 (hero shot). Moy guardó con frame_current=4 → debemos renderizar
+    # en ese frame para usar la pose que él dejó.
+    pinned_frame = blender_scene.frame_current
+    if blender_scene.frame_start <= pinned_frame <= blender_scene.frame_end:
+        blender_scene.frame_set(pinned_frame)
+    else:
+        # Si current está fuera del rango (raro pero posible si el archivo se
+        # editó), preferir el frame_end (donde típicamente queda la pose final
+        # de Moy) sobre el frame_start.
+        pinned_frame = blender_scene.frame_end
+        blender_scene.frame_set(pinned_frame)
+    print(
+        f"[render setup] frame={pinned_frame} (range "
+        f"{blender_scene.frame_start}–{blender_scene.frame_end}) — respeta "
+        f"animación de cámara",
+        flush=True,
+    )
     if camera_name:
         cam = bpy.data.objects.get(camera_name)
         if cam is None:
@@ -447,6 +470,21 @@ def run_render_one_view(
         # Camera
         if original_camera is not None:
             fresh_render_scene.camera = original_camera
+
+        # CRÍTICO: propagar el frame range + current frame de la escena original.
+        # Si la cámara tiene animación (CameraAction con keyframes), evaluarla
+        # en el frame correcto requiere que el fresh_scene esté en ese frame.
+        # Sin esto el fresh_scene queda en frame=1 (default) y la cámara se
+        # evalúa con la pose de frame 1 — que para Moy es la vista frontal,
+        # no la hero shot que dejó guardada en frame_current=4.
+        fresh_render_scene.frame_start = original_scene.frame_start
+        fresh_render_scene.frame_end = original_scene.frame_end
+        fresh_render_scene.frame_set(original_scene.frame_current)
+        print(
+            f"[render fresh] frame propagado={fresh_render_scene.frame_current} "
+            f"(range {fresh_render_scene.frame_start}–{fresh_render_scene.frame_end})",
+            flush=True,
+        )
         # Samples: si hay override, aplicarlo; si no, copiar de la escena original
         if normalized_engine == "CYCLES":
             try:
