@@ -80,9 +80,12 @@ def run_export_psd(
         if fmt == "jpeg":
             fmt = "jpg"
         width = int(spec.get("width", 0))
+        transparent = bool(spec.get("transparent", fmt != "jpg"))
+
         # width == -1 → mantener resolución nativa del PSD (no redimensiona)
         if width == -1:
             new_w, new_h = src_w, src_h
+            final_w, final_h = src_w, src_h
             resized = composite
             print(
                 f"[psd] {name} usa resolución original {src_w}x{src_h}",
@@ -93,23 +96,40 @@ def run_export_psd(
                 raise ValueError(f"width inválido en export '{name}': {width}")
             height_raw = spec.get("height")
             if height_raw is None:
+                # Sin height explícito: deducir manteniendo proporción del PSD.
                 height = round(width * src_h / src_w)
             else:
                 height = int(height_raw)
                 if height <= 0:
                     raise ValueError(f"height inválido en export '{name}': {height}")
-            # Redimensionar manteniendo aspect ratio dentro de WxH (fit inside)
+            # Output final = lienzo del tamaño pedido (WxH exacto).
+            # Imagen ajustada con "fit inside" del aspect del PSD, centrada
+            # en el lienzo. El padding sobrante queda transparente (PNG) o
+            # blanco (JPG / PNG sin transparencia). Esto es lo que la gente
+            # de packaging típicamente entrega al cliente: lienzos cuadrados
+            # de 2000x2000, 1080x1080 IG, etc.
+            final_w, final_h = width, height
             scale = min(width / src_w, height / src_h)
             new_w = max(1, round(src_w * scale))
             new_h = max(1, round(src_h * scale))
             resized = composite.resize((new_w, new_h), Image.LANCZOS)
-        transparent = bool(spec.get("transparent", fmt != "jpg"))
 
-        # Aplanar si no es transparente o si JPG
+        # Componer el lienzo final WxH, con la imagen centrada
         if fmt == "jpg" or not transparent:
-            bg = Image.new("RGBA", (new_w, new_h), (255, 255, 255, 255))
-            bg.paste(resized, mask=resized.split()[3] if resized.mode == "RGBA" else None)
-            resized = bg.convert("RGB" if fmt == "jpg" else "RGBA")
+            bg_color = (255, 255, 255, 255)
+        else:
+            bg_color = (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (final_w, final_h), bg_color)
+        # Centrar la imagen redimensionada en el lienzo
+        offset_x = (final_w - new_w) // 2
+        offset_y = (final_h - new_h) // 2
+        alpha = resized.split()[3] if resized.mode == "RGBA" else None
+        canvas.paste(resized, (offset_x, offset_y), mask=alpha)
+        if fmt == "jpg":
+            resized = canvas.convert("RGB")
+        else:
+            resized = canvas
+        new_w, new_h = final_w, final_h
 
         ext = "jpg" if fmt == "jpg" else fmt
         safe_name = name.replace("/", "_").replace("\\", "_")
