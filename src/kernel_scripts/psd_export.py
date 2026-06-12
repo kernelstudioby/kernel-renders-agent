@@ -133,7 +133,12 @@ def run_export_psd(
 
         ext = "jpg" if fmt == "jpg" else fmt
         safe_name = name.replace("/", "_").replace("\\", "_")
-        out_path = out_root / f"{safe_name}.{ext}"
+        # Prefijar el nombre del PSD para que los entregables al cliente
+        # conserven la identidad del archivo origen.
+        # Ej: psd "joya_manzana.psd" + preset "2000x2000" → "joya_manzana_2000x2000.jpg"
+        psd_stem = psd_file.stem.replace("/", "_").replace("\\", "_")
+        full_name = f"{psd_stem}_{safe_name}"
+        out_path = out_root / f"{full_name}.{ext}"
         save_kwargs: dict[str, Any] = {}
         if fmt == "jpg":
             save_kwargs.update({"quality": 92, "optimize": True, "format": "JPEG"})
@@ -144,13 +149,13 @@ def run_export_psd(
         resized.save(out_path, **save_kwargs)
         size_kb = max(1, out_path.stat().st_size // 1024)
         print(
-            f"[psd] {safe_name}.{ext} {new_w}x{new_h} ({size_kb} KB)",
+            f"[psd] {full_name}.{ext} {new_w}x{new_h} ({size_kb} KB)",
             flush=True,
         )
         outputs.append(
             {
                 "path": str(out_path),
-                "name": safe_name,
+                "name": full_name,
                 "format": ext,
                 "width": new_w,
                 "height": new_h,
