@@ -133,11 +133,15 @@ def run_export_psd(
 
         ext = "jpg" if fmt == "jpg" else fmt
         safe_name = name.replace("/", "_").replace("\\", "_")
-        # Prefijar el nombre del PSD para que los entregables al cliente
-        # conserven la identidad del archivo origen.
-        # Ej: psd "joya_manzana.psd" + preset "2000x2000" → "joya_manzana_2000x2000.jpg"
         psd_stem = psd_file.stem.replace("/", "_").replace("\\", "_")
-        full_name = f"{psd_stem}_{safe_name}"
+        # Naming de los entregables — conserva la identidad del PSD origen:
+        #   - "Original" (case-insensitive): el archivo queda con el nombre
+        #     del PSD tal cual, sin sufijo. Ej: "joya_manzana.png"
+        #   - Otros: psd_stem + "_" + name. Ej: "joya_manzana_2000.jpg"
+        if safe_name.lower() == "original":
+            full_name = psd_stem
+        else:
+            full_name = f"{psd_stem}_{safe_name}"
         out_path = out_root / f"{full_name}.{ext}"
         save_kwargs: dict[str, Any] = {}
         if fmt == "jpg":
