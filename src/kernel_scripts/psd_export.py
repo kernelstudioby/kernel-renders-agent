@@ -1,17 +1,24 @@
-"""psd_export — abre un PSD local, genera N exports en distintas resoluciones.
+"""psd_export — abre un PSD (local o remoto), genera N exports en resoluciones.
 
 Pensado para ejecutarse fuera de Blender (Python normal con psd-tools + Pillow).
 El daemon lo invoca cuando ve un plan con el tool `export_psd`.
+
+`psd_path` puede ser:
+  - Una ruta local del disco del agent (ej. los PSDs del PSDS_DIR)
+  - Una URL https:// (ej. signed URL de Supabase Storage para uploads del browser).
+    El agent la descarga a un tempfile, procesa, y borra al terminar.
 
 Argumentos del plan:
 {
   "tool": "export_psd",
   "args": {
-    "psd_path": "C:/Users/ceemk/PSDs/cccz_600ml_front.psd",
+    "psd_path": "C:/...psd"  |  "https://...psd?token=...",
+    "psd_filename": "joya_manzana.psd",  // opcional, override del nombre que
+                                          // se usará como prefijo de outputs
     "output_dir": "C:/KernelRenders/output/exports/<job_id>",
     "exports": [
-      {"name": "Tabloid_600dpi", "width": 6600, "height": 5100, "format": "png", "transparent": true},
-      {"name": "IG_Square_1080", "width": 1080, "height": 1080, "format": "jpg"},
+      {"name": "Original", "width": -1, "format": "png", "transparent": true},
+      {"name": "2000", "width": 2000, "height": 2000, "format": "jpg"},
       ...
     ]
   }
@@ -22,8 +29,58 @@ Devuelve `{"outputs": [{path, name, format, width, height, size_kb}, ...]}`
 
 from __future__ import annotations
 
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+
+@contextmanager
+def _resolve_psd_path(psd_path: str, filename_hint: str | None) -> Iterator[Path]:
+    """Devuelve un Path local al PSD, descargando si es URL https.
+
+    Si descargamos a tempfile, se borra al salir del contexto.
+    """
+    is_url = psd_path.startswith(("http://", "https://"))
+    if not is_url:
+        yield Path(psd_path)
+        return
+
+    # Descargar a un tempfile con el nombre real (para que psd_stem sea el
+    # filename que el usuario subió, no un UUID).
+    safe_name = (filename_hint or "uploaded.psd").replace("/", "_").replace("\\", "_")
+    if not safe_name.lower().endswith(".psd"):
+        safe_name += ".psd"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="kernel_psd_"))
+    local_path = tmp_dir / safe_name
+    try:
+        import httpx
+    except ImportError as e:
+        raise RuntimeError(
+            "httpx no instalado en el agent. Necesario para descargar PSDs remotos."
+        ) from e
+
+    print(f"[psd] Descargando PSD remoto → {local_path}", flush=True)
+    total_bytes = 0
+    with httpx.stream("GET", psd_path, timeout=300.0, follow_redirects=True) as r:
+        r.raise_for_status()
+        with open(local_path, "wb") as f:
+            for chunk in r.iter_bytes(1024 * 1024):  # 1 MB chunks
+                f.write(chunk)
+                total_bytes += len(chunk)
+    print(
+        f"[psd] PSD descargado · {total_bytes // 1024} KB",
+        flush=True,
+    )
+    try:
+        yield local_path
+    finally:
+        # Cleanup tempfile
+        try:
+            local_path.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except OSError:
+            pass
 
 
 def run_export_psd(
@@ -31,6 +88,7 @@ def run_export_psd(
     psd_path: str,
     output_dir: str,
     exports: list[dict[str, Any]],
+    psd_filename: str | None = None,
 ) -> dict[str, Any]:
     """Ejecuta una matriz de exports a partir de un PSD local.
 
@@ -54,13 +112,23 @@ def run_export_psd(
             "Pillow no instalado. Corre: pip install Pillow"
         ) from e
 
-    psd_file = Path(psd_path)
-    if not psd_file.exists():
-        raise FileNotFoundError(f"PSD no existe: {psd_file}")
-
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
+    with _resolve_psd_path(psd_path, psd_filename) as psd_file:
+        if not psd_file.exists():
+            raise FileNotFoundError(f"PSD no existe: {psd_file}")
+        return _process_psd(psd_file, out_root, exports, psd_filename, PSDImage, Image)
+
+
+def _process_psd(
+    psd_file: Path,
+    out_root: Path,
+    exports: list[dict[str, Any]],
+    psd_filename_override: str | None,
+    PSDImage: Any,
+    Image: Any,
+) -> dict[str, Any]:
     print(f"[psd] Abriendo {psd_file.name} ({psd_file.stat().st_size // 1024} KB)", flush=True)
     psd = PSDImage.open(str(psd_file))
     composite = psd.composite()
@@ -133,7 +201,16 @@ def run_export_psd(
 
         ext = "jpg" if fmt == "jpg" else fmt
         safe_name = name.replace("/", "_").replace("\\", "_")
-        psd_stem = psd_file.stem.replace("/", "_").replace("\\", "_")
+        # Si vino psd_filename_override (uploads del browser que necesitan
+        # preservar el nombre original), úsalo para derivar el stem; sino
+        # usa el nombre del file local (que puede ser un tempfile UUID).
+        if psd_filename_override:
+            base_for_stem = psd_filename_override
+        else:
+            base_for_stem = psd_file.name
+        psd_stem = (
+            Path(base_for_stem).stem.replace("/", "_").replace("\\", "_")
+        )
         # Naming de los entregables — conserva la identidad del PSD origen:
         #   - "Original" (case-insensitive): el archivo queda con el nombre
         #     del PSD tal cual, sin sufijo. Ej: "joya_manzana.png"
