@@ -268,14 +268,38 @@ def execute_plan(
     # procesos hijos (denoiser/OptiX) que heredan el FD y lo mantienen abierto
     # incluso después de que Blender mismo termine. El thread sigue drenando
     # mientras el daemon vigila el log_path.
+    import re
     import threading
     assert proc.stdout is not None
     last_step_reported = [-1]  # mutable para el closure
+    last_blender_emit = [0.0]   # throttle: 1 emit/seg max para Remaining
+
+    # Patrón típico de Blender Cycles durante render:
+    # "Fra:1 Mem:1234.56M ... | Time:00:01.23 | Remaining:00:03.45 | ... | Sample 50/256"
+    # "Fra:1 Mem:1234.56M ... | Time:00:01.23 | Mem:..., Peak:... | Rendered 100/256 tiles"
+    RE_FRAME = re.compile(r"Fra:(\d+)")
+    RE_TIME = re.compile(r"\| Time:(\d{1,3}):(\d{2})(?:\.(\d{2}))?")
+    RE_REMAINING = re.compile(r"\| Remaining:(\d{1,3}):(\d{2})(?:\.(\d{2}))?")
+    RE_SAMPLE = re.compile(r"Sample (\d+)/(\d+)")
+
+    def _hms_to_seconds(h_or_m: str, m_or_s: str, frac: str | None) -> float:
+        # Blender reporta como MM:SS.FF cuando es <1h, HH:MM:SS si es >=1h.
+        # Por seguridad asumimos MM:SS y ignoramos el caso >1h (renders típicos
+        # de Beyond son <60min). MM:SS.FF
+        try:
+            mm = int(h_or_m)
+            ss = int(m_or_s)
+            ff = int(frac) if frac else 0
+            return mm * 60 + ss + ff / 100.0
+        except (ValueError, TypeError):
+            return 0.0
 
     def _drain_stdout():
         assert proc.stdout is not None
         for line in proc.stdout:
             stdout_lines.append(line)
+
+            # 1) Boundary entre steps: emite progress 'step done' con message
             if on_step_done and "[step " in line:
                 try:
                     inside = line.split("[step ", 1)[1].split("]", 1)[0]
@@ -290,6 +314,54 @@ def execute_plan(
                             pass
                 except (ValueError, IndexError):
                     pass
+
+            # 2) Progreso intra-step de Blender Cycles. Throttle a 1/seg para
+            # no spammear el endpoint /progress en renders con miles de líneas.
+            if on_step_done and "Fra:" in line and "Time:" in line:
+                now = time.time()
+                if now - last_blender_emit[0] >= 1.0:
+                    try:
+                        frame_m = RE_FRAME.search(line)
+                        time_m = RE_TIME.search(line)
+                        rem_m = RE_REMAINING.search(line)
+                        sample_m = RE_SAMPLE.search(line)
+                        extras = {}
+                        if frame_m:
+                            extras["current_frame"] = int(frame_m.group(1))
+                        if time_m:
+                            extras["step_elapsed_seconds"] = _hms_to_seconds(
+                                time_m.group(1), time_m.group(2), time_m.group(3)
+                            )
+                        if rem_m:
+                            extras["remaining_seconds"] = _hms_to_seconds(
+                                rem_m.group(1), rem_m.group(2), rem_m.group(3)
+                            )
+                        if sample_m:
+                            extras["current_sample"] = int(sample_m.group(1))
+                            extras["total_samples"] = int(sample_m.group(2))
+                        # Solo emitimos si hay algo útil (al menos remaining o sample)
+                        if "remaining_seconds" in extras or "current_sample" in extras:
+                            last_blender_emit[0] = now
+                            cur = max(0, last_step_reported[0])
+                            # Construir message human-friendly
+                            parts = []
+                            if "current_sample" in extras:
+                                parts.append(f"sample {extras['current_sample']}/{extras['total_samples']}")
+                            if "remaining_seconds" in extras:
+                                rs = int(extras["remaining_seconds"])
+                                parts.append(f"ETA {rs // 60}m {rs % 60}s")
+                            msg = " · ".join(parts) if parts else "render"
+                            try:
+                                # Las keys extra se pasan al api_client que las
+                                # propaga al endpoint /api/agent/progress.
+                                on_step_done(cur, max(1, cur), msg, extras)
+                            except TypeError:
+                                # callback antiguo sin **kwargs — fallback
+                                on_step_done(cur, max(1, cur), msg)
+                            except Exception:  # noqa: BLE001
+                                pass
+                    except Exception:  # noqa: BLE001
+                        pass
 
     drain_thread = threading.Thread(target=_drain_stdout, daemon=True, name="exec-drain")
     drain_thread.start()

@@ -128,9 +128,9 @@ class AgentDaemon:
         plan = job.get("plan", [])
         total_steps = len(plan)
 
-        def _on_step(cur: int, total: int, msg: str) -> None:
+        def _on_step(cur: int, total: int, msg: str, extras: dict | None = None) -> None:
             try:
-                self.client.progress(job_id, cur, total, message=msg)
+                self.client.progress(job_id, cur, total, message=msg, extras=extras)
             except ApiError:
                 pass  # no fallar el job por error de telemetría
 

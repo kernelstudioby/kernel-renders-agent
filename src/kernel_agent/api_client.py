@@ -86,17 +86,36 @@ class ApiClient:
         total: int,
         message: str = "",
         status: str = "running",
+        extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Reporta progreso al server. Status: 'claimed' o 'running'."""
+        """Reporta progreso al server. Status: 'claimed' o 'running'.
+
+        `extras` puede incluir telemetría real-time parseada de stdout de
+        Blender: `current_frame`, `current_sample`, `total_samples`,
+        `step_elapsed_seconds`, `remaining_seconds`. El endpoint los guarda
+        en jobs.progress para que la UI muestre ETA.
+        """
+        body: dict[str, Any] = {
+            "current_step": current_step,
+            "total": total,
+            "message": message,
+            "status": status,
+        }
+        if extras:
+            for k in (
+                "current_frame",
+                "current_sample",
+                "total_samples",
+                "step_elapsed_seconds",
+                "remaining_seconds",
+            ):
+                v = extras.get(k)
+                if v is not None:
+                    body[k] = v
         return self._request(
             "POST",
             f"/api/agent/progress/{job_id}",
-            json={
-                "current_step": current_step,
-                "total": total,
-                "message": message,
-                "status": status,
-            },
+            json=body,
         )
 
     def complete_success(self, job_id: str, renders: list[dict[str, Any]]) -> dict[str, Any]:
