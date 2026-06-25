@@ -65,7 +65,12 @@ def _register_tools():
     from kernel_scripts.set_cap_color import run_set_cap_color
     from kernel_scripts.set_view_layer import run_set_active_view_layer
     from kernel_scripts.inspect_scene import run_inspect_scene
-    from kernel_scripts.render_views import run_render_one_view, run_render_all_cameras, run_render_rotations
+    from kernel_scripts.render_views import (
+        run_render_one_view,
+        run_render_all_cameras,
+        run_render_rotations,
+        run_render_at_angle,
+    )
     TOOLS["swap_label"] = run_swap_label
     TOOLS["set_cap_color"] = run_set_cap_color
     TOOLS["set_active_view_layer"] = run_set_active_view_layer
@@ -73,6 +78,7 @@ def _register_tools():
     TOOLS["render_one_view"] = run_render_one_view
     TOOLS["render_all_cameras"] = run_render_all_cameras
     TOOLS["render_rotations"] = run_render_rotations
+    TOOLS["render_at_angle"] = run_render_at_angle
 
 
 def main():

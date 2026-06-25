@@ -947,6 +947,138 @@ def run_render_rotations(
 render_rotations = run_render_rotations
 
 
+def run_render_at_angle(
+    *,
+    scene: str,
+    output_path: str,
+    angle_deg: float,
+    pivot_object_name: str | None = None,
+    engine: str | None = None,
+    samples: int | None = None,
+    resolution_x: int | None = None,
+    resolution_y: int | None = None,
+    output_format: str = "PNG",
+) -> dict[str, Any]:
+    """Renderiza UNA vista rotando la cámara `angle_deg` grados alrededor del pivote.
+
+    Convención de ángulos (mismo eje Z que render_rotations):
+        0°    = posición original de la cámara (típicamente Front)
+        90°   = rotada 90° en sentido antihorario visto desde arriba
+        180°  = vista opuesta (Back)
+        270°  = lateral opuesta a 90°
+
+    Usado cuando el usuario sube una imagen de referencia y la vista deseada
+    NO coincide exacto con ninguna cámara pre-armada en el .blend. El LLM
+    estima el ángulo a partir de la imagen y lo manda aquí; nosotros rotamos
+    la cámara fija ese ángulo y renderizamos una sola toma.
+
+    Reusa la maquinaria de render_rotations: orbita la cámara alrededor del
+    pivote en el plano XY mundial, preserva tilt original, restaura la
+    cámara al terminar (no destructivo).
+
+    Args:
+        scene: Ruta al .blend (ignorado en runtime, escena ya cargada).
+        output_path: Path absoluto del PNG/EXR de salida.
+        angle_deg: Ángulo de rotación de la cámara alrededor del pivote.
+        pivot_object_name: Override del pivote. Si None, autodetect (igual
+            que render_rotations: primer EMPTY, sino MESH mayor bbox).
+        engine, samples, resolution_x, resolution_y, output_format:
+            overrides opcionales (mismos defaults que render_one_view).
+
+    Returns:
+        dict con output_path, angle_deg, pivot_object, success.
+    """
+    import math
+    from mathutils import Matrix  # type: ignore[import-not-found]
+
+    import bpy  # type: ignore[import-not-found]
+
+    # Localizar pivote — misma lógica que render_rotations.
+    pivot = None
+    if pivot_object_name:
+        pivot = bpy.data.objects.get(pivot_object_name)
+        if pivot is None:
+            raise ValueError(
+                f"Objeto pivote '{pivot_object_name}' no existe. "
+                f"Disponibles: {[o.name for o in bpy.context.scene.objects]}"
+            )
+    else:
+        empties = [o for o in bpy.context.scene.objects if o.type == "EMPTY"]
+        if empties:
+            pivot = empties[0]
+            print(f"[render_at_angle] pivote auto: EMPTY '{pivot.name}'", flush=True)
+        else:
+            meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+            if not meshes:
+                raise ValueError("La escena no tiene MESH ni EMPTY para usar como pivote")
+            def _bbox_vol(o):
+                b = o.bound_box
+                xs = [v[0] for v in b]
+                ys = [v[1] for v in b]
+                zs = [v[2] for v in b]
+                return (max(xs) - min(xs)) * (max(ys) - min(ys)) * (max(zs) - min(zs))
+            pivot = max(meshes, key=_bbox_vol)
+            print(f"[render_at_angle] pivote auto: MESH '{pivot.name}'", flush=True)
+
+    cam = bpy.context.scene.camera
+    if cam is None:
+        cam = next((o for o in bpy.context.scene.objects if o.type == "CAMERA"), None)
+        if cam is None:
+            raise ValueError("La escena no tiene cámara")
+        bpy.context.scene.camera = cam
+
+    pivot_center = pivot.matrix_world.translation.copy()
+    cam_pos_original = cam.location.copy()
+    cam_rot_original = cam.rotation_euler.copy()
+    cam_offset = cam_pos_original - pivot_center
+
+    # Mismo workaround de animation_data que render_rotations
+    saved_action = None
+    if cam.animation_data and cam.animation_data.action:
+        saved_action = cam.animation_data.action
+        cam.animation_data.action = None
+
+    try:
+        angle_rad = math.radians(angle_deg)
+        rot_z = Matrix.Rotation(angle_rad, 4, "Z")
+        cam.location = pivot_center + (rot_z @ cam_offset)
+        original_mat = cam_rot_original.to_matrix().to_4x4()
+        cam.rotation_euler = (rot_z @ original_mat).to_euler()
+        bpy.context.view_layer.update()
+
+        print(
+            f"[render_at_angle] cámara rotada a {angle_deg}° "
+            f"loc={tuple(round(v,2) for v in cam.location)} → {output_path}",
+            flush=True,
+        )
+        res = run_render_one_view(
+            scene=scene,
+            output_path=output_path,
+            engine=engine,
+            samples=samples,
+            resolution_x=resolution_x,
+            resolution_y=resolution_y,
+            output_format=output_format,
+        )
+    finally:
+        # Restaurar estado original de la cámara — no destructivo
+        if saved_action is not None:
+            cam.animation_data.action = saved_action
+        cam.location = cam_pos_original
+        cam.rotation_euler = cam_rot_original
+
+    return {
+        "output_path": output_path,
+        "angle_deg": angle_deg,
+        "pivot_object": pivot.name,
+        "duration_seconds": res.get("duration_seconds"),
+        "success": True,
+    }
+
+
+render_at_angle = run_render_at_angle
+
+
 TOOL_SCHEMA_ONE = {
     "name": "render_one_view",
     "description": (
