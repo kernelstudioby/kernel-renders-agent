@@ -25,6 +25,40 @@ _FORMAT_EXT = {
 }
 
 
+def _resolve_camera_name(name: str, all_cams: list) -> Any | None:
+    """Match tolerante de un camera_name contra las cámaras del .blend.
+
+    El LLM a veces manda 'FRONT' cuando la cámara real se llama 'Camera_Front',
+    o 'front' con minúsculas. Esta helper intenta varias estrategias:
+
+      1. Match exacto (caso normal)
+      2. Case-insensitive exacto ('front' → 'Front')
+      3. Endswith case-insensitive ('FRONT' → 'Camera_Front')
+      4. Contains case-insensitive con UN solo match
+         ('hero' → 'Camera_Hero' si es la única con 'hero' en el nombre)
+
+    Si encuentra >1 ambigüedad en (4), devuelve None — no podemos adivinar.
+    """
+    # 1. Exact
+    for c in all_cams:
+        if c.name == name:
+            return c
+    target = name.lower()
+    # 2. Case-insensitive exact
+    for c in all_cams:
+        if c.name.lower() == target:
+            return c
+    # 3. Endswith (Camera_Front termina en "Front", "_Front", "front")
+    matches = [c for c in all_cams if c.name.lower().endswith(target) or c.name.lower().endswith("_" + target)]
+    if len(matches) == 1:
+        return matches[0]
+    # 4. Contains (último intento — solo si hay UN match)
+    contains = [c for c in all_cams if target in c.name.lower()]
+    if len(contains) == 1:
+        return contains[0]
+    return None
+
+
 def run_render_one_view(
     *,
     scene: str,
@@ -114,16 +148,20 @@ def run_render_one_view(
         flush=True,
     )
     if camera_name:
-        cam = bpy.data.objects.get(camera_name)
+        cam = _resolve_camera_name(camera_name, all_cams)
         if cam is None:
             raise ValueError(
                 f"Cámara '{camera_name}' no existe. "
                 f"Cámaras: {[c.name for c in all_cams]}"
             )
-        if cam.type != "CAMERA":
-            raise ValueError(f"Objeto '{camera_name}' no es una cámara (es '{cam.type}')")
+        if cam.name != camera_name:
+            print(
+                f"[render setup] camera_name='{camera_name}' resuelto a '{cam.name}' "
+                f"(match tolerante — el LLM probablemente omitió el prefijo Camera_)",
+                flush=True,
+            )
         blender_scene.camera = cam
-        print(f"[render setup] OVERRIDE: usando cámara '{camera_name}'", flush=True)
+        print(f"[render setup] OVERRIDE: usando cámara '{cam.name}'", flush=True)
     elif blender_scene.camera is None:
         # La escena no tiene activa; tomar la primera disponible
         first_cam = next((o for o in bpy.data.objects if o.type == "CAMERA"), None)
