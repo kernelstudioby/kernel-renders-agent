@@ -27,6 +27,7 @@ retornamos None.
 
 from __future__ import annotations
 
+import gzip
 import io
 import struct
 import zlib
@@ -34,12 +35,66 @@ from pathlib import Path
 
 
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"  # Zstandard frame magic (Blender 4+ default)
+_GZIP_MAGIC = b"\x1f\x8b"          # Gzip magic (Blender 3.x con Compress = ON)
+
+
+def _decompress_blend(blend_path: Path) -> io.BufferedReader | io.BytesIO | None:
+    """Devuelve un stream para leer el .blend, descomprimiendo si hace falta.
+
+    Blender 5.x guarda comprimido con zstd cuando "Compress File" está activado
+    (default). Versiones anteriores usaban gzip. Si el archivo NO está
+    comprimido, regresa un stream directo al disco.
+
+    Retorna None si no podemos leer/identificar.
+    """
+    with open(blend_path, "rb") as f:
+        head = f.read(7)
+    if head == b"BLENDER":
+        # Sin comprimir — leemos directo del disco.
+        return open(blend_path, "rb")
+    if head[:2] == _GZIP_MAGIC:
+        try:
+            return io.BytesIO(gzip.decompress(blend_path.read_bytes()))
+        except OSError:
+            return None
+    if head[:4] == _ZSTD_MAGIC:
+        try:
+            import zstandard  # lazy import
+        except ImportError:
+            # Sin la lib no podemos leer .blend comprimidos con zstd.
+            # En vez de fallar silencioso, el caller verá None y mostrará icono
+            # genérico. El install se hace via pip install zstandard.
+            return None
+        # Stream decompress completo a memoria (.blend típicamente <500MB; el
+        # thumbnail está en los primeros KB, pero el formato no expone offsets
+        # absolutos del TEST block — necesitamos el stream decomprimido entero
+        # o al menos un buffer grande inicial).
+        try:
+            dctx = zstandard.ZstdDecompressor()
+            data = dctx.decompress(blend_path.read_bytes(), max_output_size=2**31)
+            return io.BytesIO(data)
+        except zstandard.ZstdError:
+            # Algunos zstd frames no traen content_size — usar stream reader.
+            try:
+                dctx = zstandard.ZstdDecompressor()
+                with open(blend_path, "rb") as fh:
+                    reader = dctx.stream_reader(fh)
+                    # Leemos hasta 50 MB descomprimido (TEST está en los
+                    # primeros KB; con 50 MB sobra para cualquier blend)
+                    return io.BytesIO(reader.read(50 * 1024 * 1024))
+            except Exception:  # noqa: BLE001
+                return None
+    return None
 
 
 def extract_blend_thumbnail_png(blend_path: Path) -> bytes | None:
     """Devuelve PNG bytes del thumbnail embebido, o None si no hay."""
     try:
-        with open(blend_path, "rb") as f:
+        f = _decompress_blend(blend_path)
+        if f is None:
+            return None
+        with f:
             magic = f.read(7)
             if magic != b"BLENDER":
                 return None
