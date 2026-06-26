@@ -300,6 +300,23 @@ def execute_plan(
         except (ValueError, TypeError):
             return 0.0
 
+    # CRÍTICO: on_step_done hace una llamada HTTPS al endpoint /progress
+    # (red, ~500-2000ms RTT). Si la llamamos síncronamente desde aquí, el
+    # drain_stdout se bloquea, el pipe se llena, y Blender se DETIENE
+    # esperando que liberemos el pipe — convertía renders de 10s en 4min.
+    # Disparamos en thread fire-and-forget (daemon, sin join) para que el
+    # drain nunca pause. Throttle a 1/seg ya limita el número de threads.
+    def _fire_progress(*args):
+        try:
+            threading.Thread(
+                target=on_step_done,  # type: ignore[arg-type]
+                args=args,
+                daemon=True,
+                name="progress-emit",
+            ).start()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _drain_stdout():
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -314,10 +331,7 @@ def execute_plan(
                     if cur > last_step_reported[0]:
                         last_step_reported[0] = cur
                         msg = line.split("]", 1)[1].strip() if "]" in line else ""
-                        try:
-                            on_step_done(cur, int(total_str), msg)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        _fire_progress(cur, int(total_str), msg)
                 except (ValueError, IndexError):
                     pass
 
@@ -357,15 +371,9 @@ def execute_plan(
                                 rs = int(extras["remaining_seconds"])
                                 parts.append(f"ETA {rs // 60}m {rs % 60}s")
                             msg = " · ".join(parts) if parts else "render"
-                            try:
-                                # Las keys extra se pasan al api_client que las
-                                # propaga al endpoint /api/agent/progress.
-                                on_step_done(cur, max(1, cur), msg, extras)
-                            except TypeError:
-                                # callback antiguo sin **kwargs — fallback
-                                on_step_done(cur, max(1, cur), msg)
-                            except Exception:  # noqa: BLE001
-                                pass
+                            # Fire-and-forget también aquí — mismo motivo que
+                            # arriba (no bloquear el drain con HTTPS).
+                            _fire_progress(cur, max(1, cur), msg, extras)
                     except Exception:  # noqa: BLE001
                         pass
 
