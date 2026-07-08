@@ -227,10 +227,21 @@ def _process_psd(
             save_kwargs.update({"compress_level": 9, "format": "PNG"})
         elif fmt == "webp":
             save_kwargs.update({"quality": 90, "format": "WEBP"})
+        # DPI embebido en el archivo — Beyond entrega mucho material para print
+        # y necesita 300 DPI (72 default web no sirve). Pillow lo escribe:
+        #   PNG → chunk 'pHYs' (pixels per meter)
+        #   JPEG → JFIF header X/Y density
+        #   WEBP → EXIF XResolution/YResolution
+        # Nota importante: DPI es SOLO metadata, no cambia píxeles ni tamaño
+        # físico. La resolución real sigue siendo width x height del spec.
+        dpi_raw = spec.get("dpi")
+        dpi = int(dpi_raw) if dpi_raw else 72
+        if dpi != 72:
+            save_kwargs["dpi"] = (dpi, dpi)
         resized.save(out_path, **save_kwargs)
         size_kb = max(1, out_path.stat().st_size // 1024)
         print(
-            f"[psd] {full_name}.{ext} {new_w}x{new_h} ({size_kb} KB)",
+            f"[psd] {full_name}.{ext} {new_w}x{new_h} @ {dpi} DPI ({size_kb} KB)",
             flush=True,
         )
         outputs.append(
@@ -269,6 +280,7 @@ TOOL_SCHEMA = {
                         "height": {"type": "integer"},
                         "format": {"type": "string", "enum": ["png", "jpg", "webp"]},
                         "transparent": {"type": "boolean"},
+                        "dpi": {"type": "integer", "minimum": 72, "maximum": 1200},
                     },
                     "required": ["name", "width", "format"],
                 },
