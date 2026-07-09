@@ -16,7 +16,7 @@ from .executor import execute_plan
 from .library_scan import scan_blend_files_with_view_layers
 from .psd_executor import execute_psd_plan, is_psd_plan
 from .psd_scan import scan_psd_files
-from .storage import upload_render
+from .storage import upload_blend_for_download, upload_render
 
 log = logging.getLogger("kernel-agent.daemon")
 
@@ -109,6 +109,10 @@ class AgentDaemon:
             library_scenes=library_scenes,
             library_psds=library_psds,
         )
+        blend_download = result.get("blend_download")
+        if blend_download:
+            self._handle_blend_download(blend_download)
+
         job = result.get("job")
         if not job:
             return
@@ -254,3 +258,42 @@ class AgentDaemon:
             len(local_artifacts),
         )
         self.client.complete_success(job_id, renders)
+
+    def _handle_blend_download(self, blend_download: dict) -> None:
+        """Sube un .blend en bruto para que el usuario lo baje desde Library
+        (KER-190). Se resuelve antes que el job de render de este mismo tick
+        para no competir con el heartbeat de un render largo en el próximo
+        poll, pero después de haber hecho ya el poll con el heartbeat fresco.
+
+        No usa claim/heartbeat como los jobs de render: el server solo
+        entrega esta solicitud al agent dueño del scene_path, así que no
+        hay riesgo de que dos agents la tomen a la vez.
+        """
+        download_id = blend_download["id"]
+        scene_path = blend_download.get("scene_path", "")
+        log.info("Descarga de .blend pendiente %s · %s", download_id, scene_path)
+
+        local_path = Path(scene_path)
+        if not local_path.is_file():
+            msg = f"archivo no encontrado en disco: {scene_path}"
+            log.error("Descarga %s falló: %s", download_id, msg)
+            try:
+                self.client.fail_blend_download(download_id, msg)
+            except ApiError:
+                pass
+            return
+
+        try:
+            uploaded = upload_blend_for_download(local_path, download_id, self.client)
+            self.client.complete_blend_download(download_id, uploaded.size_bytes)
+            log.info(
+                "Descarga %s lista · %d MB subidos",
+                download_id,
+                uploaded.size_bytes // (1024 * 1024),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("Descarga %s falló: %s", download_id, e)
+            try:
+                self.client.fail_blend_download(download_id, str(e))
+            except ApiError:
+                pass

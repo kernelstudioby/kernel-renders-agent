@@ -134,6 +134,28 @@ class ApiClient:
             json={"error": error[:2000]},  # cap length
         )
 
+    # --- Descarga on-demand de .blend (Library → "descargar para trabajar local") ---
+
+    def request_blend_download_upload_url(self, download_id: str) -> dict[str, Any]:
+        """Pide signed upload URL para subir el .blend en bruto al bucket temporal."""
+        return self._request("POST", f"/api/agent/blend-download/{download_id}/upload-url")
+
+    def complete_blend_download(self, download_id: str, size_bytes: int) -> dict[str, Any]:
+        """Marca la descarga como lista tras terminar el upload."""
+        return self._request(
+            "POST",
+            f"/api/agent/blend-download/{download_id}/complete",
+            json={"size_bytes": size_bytes},
+        )
+
+    def fail_blend_download(self, download_id: str, error: str) -> dict[str, Any]:
+        """Reporta que no se pudo preparar la descarga."""
+        return self._request(
+            "POST",
+            f"/api/agent/blend-download/{download_id}/complete",
+            json={"error": error[:2000]},
+        )
+
     def upload_thumbnail(self, png_bytes: bytes, hash_hex: str) -> str | None:
         """Sube el thumbnail extraído de un .blend; devuelve URL pública o None.
 
