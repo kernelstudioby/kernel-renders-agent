@@ -115,3 +115,55 @@ def upload_render(
         width=w,
         height=h,
     )
+
+
+def upload_blend_for_download(
+    local_path: Path,
+    download_id: str,
+    api_client,
+    timeout: float = 1800.0,
+    chunk_size: int = 8 * 1024 * 1024,
+) -> UploadResult:
+    """Sube un .blend en bruto (sin pasar por Blender) al bucket temporal
+    `blend-downloads`, para que el usuario lo baje desde Library y lo trabaje
+    localmente. A diferencia de `upload_render`, streamea en chunks porque
+    estos archivos pueden pesar cientos de MB / varios GB — cargarlos
+    enteros en memoria no es seguro.
+
+    Flujo: POST /api/agent/blend-download/:id/upload-url → PUT streaming al
+    signed URL. El caller reporta éxito/error al server por separado
+    (api_client.complete_blend_download / fail_blend_download).
+    """
+    size = local_path.stat().st_size
+
+    resp = api_client.request_blend_download_upload_url(download_id)
+    signed_url = resp["signed_url"]
+    storage_path = resp["storage_path"]
+
+    def _chunks():
+        with local_path.open("rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+    put_resp = httpx.put(
+        signed_url,
+        content=_chunks(),
+        headers={"Content-Type": "application/octet-stream"},
+        timeout=timeout,
+    )
+    if put_resp.status_code >= 400:
+        raise RuntimeError(
+            f"upload PUT failed [{put_resp.status_code}]: {put_resp.text[:200]}"
+        )
+
+    return UploadResult(
+        storage_path=storage_path,
+        public_url=None,
+        size_bytes=size,
+        sha256="",
+        width=None,
+        height=None,
+    )
