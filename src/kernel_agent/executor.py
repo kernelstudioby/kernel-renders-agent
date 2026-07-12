@@ -41,6 +41,7 @@ class ExecuteResult:
     steps_executed: int
     steps_total: int
     failed_step: dict | None = None
+    cancelled: bool = False
 
 
 def _runner_script(plan_json: str, log_path: str, scripts_src: str) -> str:
@@ -215,6 +216,7 @@ def execute_plan(
     work_dir: Path | None = None,
     on_step_done: callable | None = None,
     output_dir: str = "",
+    abort_event: "threading.Event | None" = None,
 ) -> ExecuteResult:
     """Ejecuta el plan completo lanzando Blender headless.
 
@@ -224,6 +226,10 @@ def execute_plan(
         work_dir: dir para script temp y log. Si None, usa tmpdir.
         on_step_done: callback opcional invocado al detectar "[step N/M]" en stdout.
                       Signature: (step_index, total, message) -> None
+        abort_event: KER-229 — si se setea mientras Blender está corriendo,
+                      se mata el proceso y el resultado vuelve con
+                      cancelled=True. El caller (daemon.py) es responsable de
+                      setearlo cuando detecta status='cancelled' en el server.
     """
     import time
 
@@ -385,12 +391,23 @@ def execute_plan(
     # En cuanto exista, sabemos que la lógica del plan terminó.
     LOG_POLL_INTERVAL_S = 0.5
     MAX_RUNTIME_S = 4 * 60 * 60  # 4h hard cap como red de seguridad
+    cancelled = False
     while True:
         if log_path.exists() and log_path.stat().st_size > 0:
+            # El plan ya terminó de correr (éxito o falla) — el log ya está
+            # escrito, así que una cancelación de último momento no aplica:
+            # dejamos que termine de reportarse normal.
             break
         rc = proc.poll()
         if rc is not None:
             # Blender terminó antes de escribir el log (crash temprano).
+            break
+        if abort_event is not None and abort_event.is_set():
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            cancelled = True
             break
         if time.time() - start > MAX_RUNTIME_S:
             try:
@@ -436,7 +453,7 @@ def execute_plan(
             pass
 
     return ExecuteResult(
-        success=proc.returncode == 0 and failed_step is None,
+        success=proc.returncode == 0 and failed_step is None and not cancelled,
         duration_seconds=round(duration, 2),
         stdout=stdout,
         stderr=stderr,
@@ -445,4 +462,5 @@ def execute_plan(
         steps_executed=steps_executed,
         steps_total=len(plan),
         failed_step=failed_step,
+        cancelled=cancelled,
     )

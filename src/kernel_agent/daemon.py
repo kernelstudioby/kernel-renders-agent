@@ -61,6 +61,43 @@ class _Heartbeat:
                 pass
 
 
+class _CancelWatcher:
+    """KER-229: mientras un job corre, consulta periódicamente su status en
+    el server. Si alguien lo cancela desde la UI, setea `event` — executor.py
+    lo revisa en su loop de polling y mata el proceso de Blender.
+
+    Igual que _Heartbeat, corre en su propio thread para no bloquear el
+    drenado de stdout de Blender (que es lo que de verdad determina cuándo
+    termina el render).
+    """
+
+    def __init__(self, client: ApiClient, job_id: str, interval: int = 5):
+        self.client = client
+        self.job_id = job_id
+        self.interval = interval
+        self.event = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="cancel-watcher")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.interval + 2)
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            status = self.client.get_job_status(self.job_id)
+            if status == "cancelled":
+                self.event.set()
+                return
+
+
 class AgentDaemon:
     def __init__(self, cfg: AgentConfig):
         self.cfg = cfg
@@ -140,6 +177,11 @@ class AgentDaemon:
 
         heartbeat = _Heartbeat(self.client, self.cfg, interval=self.cfg.poll_interval_seconds)
         heartbeat.start()
+        # KER-229: mientras el render corre, vigilamos si lo cancelaron desde
+        # la UI. Solo aplica al path de Blender (execute_plan acepta
+        # abort_event) — los jobs de PSD son rápidos y no pasan por aquí.
+        cancel_watcher = _CancelWatcher(self.client, job_id, interval=self.cfg.poll_interval_seconds)
+        cancel_watcher.start()
         try:
             if is_psd_plan(plan):
                 # Job de PSD: no levanta Blender, ejecuta con psd-tools + Pillow
@@ -154,6 +196,7 @@ class AgentDaemon:
                     blender_bin=self.cfg.blender_bin,
                     on_step_done=_on_step,
                     output_dir=self.cfg.output_dir,
+                    abort_event=cancel_watcher.event,
                 )
         except Exception as e:  # noqa: BLE001
             log.exception("Excepción ejecutando plan: %s", e)
@@ -161,6 +204,14 @@ class AgentDaemon:
             return
         finally:
             heartbeat.stop()
+            cancel_watcher.stop()
+
+        if getattr(exec_result, "cancelled", False):
+            # El server ya marcó status='cancelled' cuando el usuario le dio
+            # click a Cancelar — no llamamos complete_success/complete_failure
+            # para no pisarlo de vuelta a 'failed'.
+            log.info("Job %s cancelado por el usuario — proceso de Blender terminado", job_id)
+            return
 
         # Mostrar líneas de diagnóstico de Blender en la consola del daemon
         # (especialmente útiles para Moy: qué cámara se usó, qué view_layer,
