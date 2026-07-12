@@ -81,19 +81,19 @@ class ApiClient:
 
     def get_job_status(self, job_id: str) -> str | None:
         """Consulta el status actual del job (KER-229: detectar cancelación
-        mientras Blender está renderizando). Devuelve None ante cualquier
-        error de red — el caller no debe abortar el render por un timeout
-        transitorio de esta consulta, solo por un status='cancelled' real.
+        mientras Blender está renderizando). Usa /api/agent/jobs/:id/status
+        (no /api/jobs/:id — ese vive detrás del middleware de sesión del
+        browser y el daemon solo tiene x-api-key, nunca llegaría al handler).
+        Devuelve None ante cualquier error de red — el caller no debe abortar
+        el render por un timeout transitorio de esta consulta, solo por un
+        status='cancelled' real.
         """
         try:
-            resp = self._request("GET", f"/api/jobs/{job_id}")
+            resp = self._request("GET", f"/api/agent/jobs/{job_id}/status")
         except ApiError:
             return None
-        job = resp.get("job")
-        if isinstance(job, dict):
-            status = job.get("status")
-            return status if isinstance(status, str) else None
-        return None
+        status = resp.get("status")
+        return status if isinstance(status, str) else None
 
     def progress(
         self,
