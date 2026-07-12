@@ -79,6 +79,22 @@ class ApiClient:
         """Reclama un job atómicamente. Devuelve {job} o 409 si otro agent ya lo tomó."""
         return self._request("POST", f"/api/agent/claim/{job_id}")
 
+    def get_job_status(self, job_id: str) -> str | None:
+        """Consulta el status actual del job (KER-229: detectar cancelación
+        mientras Blender está renderizando). Devuelve None ante cualquier
+        error de red — el caller no debe abortar el render por un timeout
+        transitorio de esta consulta, solo por un status='cancelled' real.
+        """
+        try:
+            resp = self._request("GET", f"/api/jobs/{job_id}")
+        except ApiError:
+            return None
+        job = resp.get("job")
+        if isinstance(job, dict):
+            status = job.get("status")
+            return status if isinstance(status, str) else None
+        return None
+
     def progress(
         self,
         job_id: str,
