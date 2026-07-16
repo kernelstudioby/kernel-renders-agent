@@ -92,6 +92,7 @@ def scan_blend_files_with_view_layers(
             "view_layers": meta.get("view_layers", []),
             "cameras": meta.get("cameras", []),
             "active_camera": meta.get("active_camera"),
+            "rotation_frames": meta.get("rotation_frames", []),
         }
         thumb_url = thumb_map.get(path_key)
         if thumb_url:

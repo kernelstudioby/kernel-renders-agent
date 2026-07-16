@@ -1,5 +1,5 @@
-"""Lee view_layers + cámaras de cada .blend para que la UI muestre selectores
-dinámicos en lugar de toggles hardcoded.
+"""Lee view_layers + cámaras + fotogramas animados de cada .blend para que la
+UI muestre selectores dinámicos en lugar de toggles hardcoded.
 
 Abrir Blender headless por cada .blend tarda 3-10s. Cacheamos en disco por
 (path, mtime, size_bytes) para que solo se re-escanee cuando el archivo cambie.
@@ -11,10 +11,20 @@ Forma: {
     "size": N,
     "view_layers": [...],
     "cameras": [{"name": "Camera_Front", "is_active": True, "lens_mm": 50.0}],
+    "rotation_frames": [1, 2, 3, 4],
     "scanned_at": N
   },
   ...
 }
+
+KER-273: `rotation_frames` son los keyframes del turntable del producto (ej.
+"vamos a rotar el producto usando los fotogramas 1/2/3/4 en vez de armar
+cámaras extra"). Verificado contra 3 escenas reales de Beyond (2.75L, 250ml
+6-pack, lata 354ml): el objeto que rota el producto siempre es un EMPTY con
+al menos un hijo (la geometría del envase — bottle/cap/label/can). Cámaras y
+luces también suelen tener 2-3 keyframes sueltos (ajustes de encuadre), pero
+nunca tienen hijos — por eso se descartan como ruido. Si hay varios EMPTY
+animados con hijos, se toma el que más hijos tiene (el turntable principal).
 """
 
 from __future__ import annotations
@@ -46,7 +56,58 @@ for o in bpy.data.objects:
         'is_active': (o is s.camera),
         'lens_mm': lens,
     })
-out = {'view_layers': vls, 'cameras': cams, 'active_camera': active_cam_name}
+
+def keyframes_for_action(action, slot):
+    frames = set()
+    if getattr(action, 'is_action_legacy', False):
+        for fc in action.fcurves:
+            for kp in fc.keyframe_points:
+                frames.add(int(round(kp.co[0])))
+        return frames
+    for layer in action.layers:
+        for strip in layer.strips:
+            if strip.type != 'KEYFRAME':
+                continue
+            try:
+                cb = strip.channelbag(slot, ensure=False)
+            except Exception:
+                cb = None
+            if not cb:
+                continue
+            for fc in cb.fcurves:
+                for kp in fc.keyframe_points:
+                    frames.add(int(round(kp.co[0])))
+    return frames
+
+children_count = {}
+for o in bpy.data.objects:
+    if o.parent:
+        children_count[o.parent.name] = children_count.get(o.parent.name, 0) + 1
+
+best_empty = None
+best_children = 0
+for o in bpy.data.objects:
+    if o.type != 'EMPTY':
+        continue
+    ad = o.animation_data
+    if not ad or not ad.action:
+        continue
+    n_children = children_count.get(o.name, 0)
+    if n_children == 0:
+        continue
+    frames = keyframes_for_action(ad.action, getattr(ad, 'action_slot', None))
+    if not frames:
+        continue
+    if n_children > best_children:
+        best_children = n_children
+        best_empty = sorted(frames)
+
+out = {
+    'view_layers': vls,
+    'cameras': cams,
+    'active_camera': active_cam_name,
+    'rotation_frames': best_empty or [],
+}
 print('KERNEL_META_JSON:' + json.dumps(out))
 """
 
@@ -78,8 +139,16 @@ def _save_cache(p: Path, cache: dict) -> None:
         pass
 
 
+_EMPTY_METADATA: dict[str, Any] = {
+    "view_layers": [],
+    "cameras": [],
+    "active_camera": None,
+    "rotation_frames": [],
+}
+
+
 def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dict[str, Any]:
-    """Lanza Blender headless contra el .blend y extrae view_layers + cameras."""
+    """Lanza Blender headless contra el .blend y extrae view_layers + cameras + rotation_frames."""
     try:
         result = subprocess.run(
             [blender_bin, "--background", blend_path, "--python-expr", _BLENDER_PROBE_SCRIPT],
@@ -88,7 +157,7 @@ def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dic
             timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return {"view_layers": [], "cameras": [], "active_camera": None}
+        return dict(_EMPTY_METADATA)
     for line in result.stdout.splitlines():
         if line.startswith("KERNEL_META_JSON:"):
             try:
@@ -110,10 +179,13 @@ def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dic
                             if isinstance(c, dict) and c.get("name")
                         ],
                         "active_camera": payload.get("active_camera"),
+                        "rotation_frames": sorted(
+                            {int(f) for f in (payload.get("rotation_frames") or [])}
+                        ),
                     }
             except ValueError:
                 pass
-    return {"view_layers": [], "cameras": [], "active_camera": None}
+    return dict(_EMPTY_METADATA)
 
 
 def get_view_layers_for_scenes(
@@ -134,11 +206,11 @@ def get_metadata_for_scenes(
     blender_bin: str,
     output_dir: str | None,
 ) -> dict[str, dict[str, Any]]:
-    """Para cada scene devuelve { view_layers: [...], cameras: [...], active_camera: str }.
+    """Para cada scene devuelve { view_layers, cameras, active_camera, rotation_frames }.
 
     Usa cache disk-backed; solo abre Blender si el archivo cambió desde el
-    último escaneo. Cache anterior que solo tenía view_layers se re-escanea
-    automáticamente porque le falta el campo `cameras`.
+    último escaneo. Cache anterior que no tenía alguno de los campos nuevos
+    (`cameras`, `rotation_frames`) se re-escanea automáticamente.
     """
     cache_path = _cache_path(output_dir)
     cache = _load_cache(cache_path)
@@ -156,18 +228,20 @@ def get_metadata_for_scenes(
         cache_key = str(p.resolve())
         entry = cache.get(cache_key)
 
-        # Cache hit: mismo mtime + size Y tiene el campo nuevo `cameras`
+        # Cache hit: mismo mtime + size Y tiene los campos nuevos
         if (
             entry
             and entry.get("mtime") == int(stat.st_mtime)
             and entry.get("size") == stat.st_size
             and isinstance(entry.get("view_layers"), list)
             and isinstance(entry.get("cameras"), list)
+            and isinstance(entry.get("rotation_frames"), list)
         ):
             result[cache_key] = {
                 "view_layers": entry["view_layers"],
                 "cameras": entry["cameras"],
                 "active_camera": entry.get("active_camera"),
+                "rotation_frames": entry["rotation_frames"],
             }
             continue
 
@@ -179,12 +253,14 @@ def get_metadata_for_scenes(
             "view_layers": meta["view_layers"],
             "cameras": meta["cameras"],
             "active_camera": meta["active_camera"],
+            "rotation_frames": meta["rotation_frames"],
             "scanned_at": int(time.time()),
         }
         result[cache_key] = {
             "view_layers": meta["view_layers"],
             "cameras": meta["cameras"],
             "active_camera": meta["active_camera"],
+            "rotation_frames": meta["rotation_frames"],
         }
         cache_dirty = True
 
