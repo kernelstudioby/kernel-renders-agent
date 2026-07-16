@@ -140,16 +140,18 @@ def run_render_one_view(
     # frame 4 (hero shot). Moy guardó con frame_current=4 → debemos renderizar
     # en ese frame para usar la pose que él dejó.
     if frame is not None:
+        # NO validar contra frame_start/frame_end: ese rango es solo el de
+        # "Render Animation" en Output Properties — no tiene relación con los
+        # keyframes reales de un objeto. Confirmado en escenas reales de Beyond
+        # (ej. cc_354ml_can_scene_Final): frame_end=1 pero el turntable tiene
+        # keyframes en 1/2/3. Blender.frame_set() evalúa cualquier frame sin
+        # problema aunque esté fuera de ese rango — validar aquí solo rompía
+        # selecciones válidas reportadas por scene_metadata.rotation_frames.
         pinned_frame = frame
-        if not (blender_scene.frame_start <= pinned_frame <= blender_scene.frame_end):
-            raise ValueError(
-                f"frame={frame} fuera del rango de la escena "
-                f"({blender_scene.frame_start}–{blender_scene.frame_end})"
-            )
         blender_scene.frame_set(pinned_frame)
         print(
             f"[render setup] frame={pinned_frame} (override explícito, rango "
-            f"{blender_scene.frame_start}–{blender_scene.frame_end})",
+            f"render de la escena {blender_scene.frame_start}–{blender_scene.frame_end})",
             flush=True,
         )
     else:
