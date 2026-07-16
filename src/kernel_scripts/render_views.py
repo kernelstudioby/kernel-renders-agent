@@ -69,6 +69,7 @@ def run_render_one_view(
     resolution_x: int | None = None,
     resolution_y: int | None = None,
     output_format: str = "PNG",
+    frame: int | None = None,
 ) -> dict[str, Any]:
     """Renderiza UNA cámara de la escena.
 
@@ -86,6 +87,11 @@ def run_render_one_view(
         resolution_x, resolution_y: Override de resolución. Si None, respeta el .blend.
         output_format: 'PNG' (default), 'EXR' (single layer), 'EXR_MULTILAYER'
             (todos los passes). Para EXR Beyond/Moy lo usa en post-prod.
+        frame: Override de frame (KER-273 — "fotogramas animados"). Se usa
+            para rotar el producto seleccionando un keyframe del turntable
+            (`rotation_frames` reportado por scene_metadata) en vez de armar
+            cámaras extra. Si None, respeta el frame_current guardado en el
+            .blend (comportamiento previo, sin cambios).
 
     Returns:
         dict con output_path, duration, success.
@@ -125,28 +131,43 @@ def run_render_one_view(
         flush=True,
     )
 
-    # CRÍTICO: respetar el frame_current del .blend.
+    # CRÍTICO: respetar el frame_current del .blend, salvo que el caller pida
+    # un frame explícito (KER-273 — seleccionar un fotograma del turntable).
     # Cuando un .blend tiene animación de cámara (Moy las usa para hero shots
     # con keyframes en frames 3-4), el render headless arranca en frame 1 por
     # default y la cámara queda en otra posición. Reproducir: scene multipack
     # tiene keyframes con rot_x=90° en frame 1 (vista frontal) y rot_x=68° en
     # frame 4 (hero shot). Moy guardó con frame_current=4 → debemos renderizar
     # en ese frame para usar la pose que él dejó.
-    pinned_frame = blender_scene.frame_current
-    if blender_scene.frame_start <= pinned_frame <= blender_scene.frame_end:
+    if frame is not None:
+        pinned_frame = frame
+        if not (blender_scene.frame_start <= pinned_frame <= blender_scene.frame_end):
+            raise ValueError(
+                f"frame={frame} fuera del rango de la escena "
+                f"({blender_scene.frame_start}–{blender_scene.frame_end})"
+            )
         blender_scene.frame_set(pinned_frame)
+        print(
+            f"[render setup] frame={pinned_frame} (override explícito, rango "
+            f"{blender_scene.frame_start}–{blender_scene.frame_end})",
+            flush=True,
+        )
     else:
-        # Si current está fuera del rango (raro pero posible si el archivo se
-        # editó), preferir el frame_end (donde típicamente queda la pose final
-        # de Moy) sobre el frame_start.
-        pinned_frame = blender_scene.frame_end
-        blender_scene.frame_set(pinned_frame)
-    print(
-        f"[render setup] frame={pinned_frame} (range "
-        f"{blender_scene.frame_start}–{blender_scene.frame_end}) — respeta "
-        f"animación de cámara",
-        flush=True,
-    )
+        pinned_frame = blender_scene.frame_current
+        if blender_scene.frame_start <= pinned_frame <= blender_scene.frame_end:
+            blender_scene.frame_set(pinned_frame)
+        else:
+            # Si current está fuera del rango (raro pero posible si el archivo se
+            # editó), preferir el frame_end (donde típicamente queda la pose final
+            # de Moy) sobre el frame_start.
+            pinned_frame = blender_scene.frame_end
+            blender_scene.frame_set(pinned_frame)
+        print(
+            f"[render setup] frame={pinned_frame} (range "
+            f"{blender_scene.frame_start}–{blender_scene.frame_end}) — respeta "
+            f"animación de cámara",
+            flush=True,
+        )
     if camera_name:
         cam = _resolve_camera_name(camera_name, all_cams)
         if cam is None:
