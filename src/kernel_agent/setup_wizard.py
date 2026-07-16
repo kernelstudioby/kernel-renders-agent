@@ -97,7 +97,7 @@ def run_wizard() -> AgentConfig:
     # 1. Server URL
     cfg.server_url = Prompt.ask(
         "URL del servidor",
-        default=existing.server_url or "https://kernel-renders.vercel.app",
+        default=existing.server_url or "https://kernel-renders-web.vercel.app",
     ).rstrip("/")
 
     # 2. API key
