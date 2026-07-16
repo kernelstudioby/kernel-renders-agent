@@ -1,7 +1,7 @@
 # Kernel Renders Agent
 
 Daemon Python que corre en una PC con GPU. Hace polling a la plataforma web
-(`https://kernel-renders.vercel.app`) y ejecuta los jobs de Blender contra
+(`https://kernel-renders-web.vercel.app`) y ejecuta los jobs de Blender contra
 escenas locales. Los renders se reportan de vuelta al server.
 
 Patrón de autenticación: **API key estática por agent** (estilo Kernel Pack
@@ -30,7 +30,7 @@ kernel-agent setup
 ```
 
 El wizard pregunta:
-1. URL del servidor (default: `https://kernel-renders.vercel.app`)
+1. URL del servidor (default: `https://kernel-renders-web.vercel.app`)
 2. API key del agent (cópiala del admin)
 3. Ruta a `blender.exe` (autodetect en Windows)
 4. Carpeta del library (donde están los `.blend`)

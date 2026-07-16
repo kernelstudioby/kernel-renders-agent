@@ -20,7 +20,7 @@ APP_NAME = "KernelRendersAgent"
 
 @dataclass
 class AgentConfig:
-    server_url: str = "https://kernel-renders.vercel.app"
+    server_url: str = "https://kernel-renders-web.vercel.app"
     api_key: str = ""
     agent_name: str = ""
     blender_bin: str = ""
