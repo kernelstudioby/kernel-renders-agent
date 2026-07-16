@@ -18,7 +18,7 @@ Argumentos del plan:
     "output_dir": "C:/KernelRenders/output/exports/<job_id>",
     "exports": [
       {"name": "Original", "width": -1, "format": "png", "transparent": true},
-      {"name": "2000", "width": 2000, "height": 2000, "format": "jpg"},
+      {"name": "2000", "width": 2000, "height": 2000, "format": "jpg", "dpi": 300},
       ...
     ]
   }
@@ -149,6 +149,8 @@ def _process_psd(
             fmt = "jpg"
         width = int(spec.get("width", 0))
         transparent = bool(spec.get("transparent", fmt != "jpg"))
+        dpi_raw = spec.get("dpi")
+        dpi = int(dpi_raw) if dpi_raw else None
 
         # width == -1 → mantener resolución nativa del PSD (no redimensiona)
         if width == -1:
@@ -227,6 +229,11 @@ def _process_psd(
             save_kwargs.update({"compress_level": 9, "format": "PNG"})
         elif fmt == "webp":
             save_kwargs.update({"quality": 90, "format": "WEBP"})
+        if dpi:
+            # Pillow escribe la metadata de DPI real en PNG (chunk pHYs) y JPEG
+            # (densidad JFIF). WebP no tiene un campo de DPI estándar — Pillow
+            # acepta el kwarg sin error pero no lo persiste (verificado).
+            save_kwargs["dpi"] = (dpi, dpi)
         resized.save(out_path, **save_kwargs)
         size_kb = max(1, out_path.stat().st_size // 1024)
         print(
@@ -240,6 +247,7 @@ def _process_psd(
                 "format": ext,
                 "width": new_w,
                 "height": new_h,
+                "dpi": dpi,
                 "size_kb": size_kb,
             }
         )
@@ -269,6 +277,10 @@ TOOL_SCHEMA = {
                         "height": {"type": "integer"},
                         "format": {"type": "string", "enum": ["png", "jpg", "webp"]},
                         "transparent": {"type": "boolean"},
+                        "dpi": {
+                            "type": "integer",
+                            "description": "Metadata de resolución de impresión (ej. 300). Solo se embebe en PNG/JPG — WebP no soporta DPI.",
+                        },
                     },
                     "required": ["name", "width", "format"],
                 },
