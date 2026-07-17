@@ -84,9 +84,15 @@ class ApiClient:
         mientras Blender está renderizando). Devuelve None ante cualquier
         error de red — el caller no debe abortar el render por un timeout
         transitorio de esta consulta, solo por un status='cancelled' real.
+
+        Usa /api/agent/jobs/:id/status (autenticado con x-api-key), NO
+        /api/jobs/:id — esa ruta exige cookie de sesión y el middleware la
+        redirige (307) antes de llegar al handler, así que esta consulta
+        siempre fallaba silenciosamente y la cancelación desde la UI nunca
+        llegaba a interrumpir un render en curso.
         """
         try:
-            resp = self._request("GET", f"/api/jobs/{job_id}")
+            resp = self._request("GET", f"/api/agent/jobs/{job_id}/status")
         except ApiError:
             return None
         job = resp.get("job")
