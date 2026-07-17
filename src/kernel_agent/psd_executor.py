@@ -34,10 +34,12 @@ class PsdExecuteResult:
 def execute_psd_plan(
     plan: list[dict],
     on_step: Callable[[int, int, str], None] | None = None,
+    blender_bin: str | None = None,
 ) -> PsdExecuteResult:
-    """Ejecuta un plan PSD (export_psd, futuro: composite_psd, etc).
-
-    No carga Blender. Usa psd-tools + Pillow directamente.
+    """Ejecuta un plan "no-Blender-executor": export_psd (psd-tools + Pillow)
+    y uv_retexture (UV Lab — este sí necesita Blender, pero lo spawnea él
+    mismo como subprocess en vez de depender de que el executor genérico ya
+    tenga la escena cargada; ver kernel_scripts/uv_retexture.py).
     """
     start = time.time()
     log_lines: list[str] = []
@@ -66,6 +68,8 @@ def execute_psd_plan(
     try:
         from kernel_scripts.psd_export import run_export_psd
         tools["export_psd"] = run_export_psd
+        from kernel_scripts.uv_retexture import run_uv_retexture
+        tools["uv_retexture"] = run_uv_retexture
     except Exception as e:
         tb = traceback.format_exc()
         return PsdExecuteResult(
@@ -95,8 +99,16 @@ def execute_psd_plan(
                 "error": f"tool desconocido (disponibles: {list(tools)})",
             }
             break
+        # uv_retexture necesita blender_bin (spawnea su propio subprocess de
+        # Blender) — es config local del agent, no algo que el plan traiga.
+        call_args = dict(args)
+        if tool_name == "uv_retexture":
+            if not blender_bin:
+                failed = {"index": i, "tool": tool_name, "error": "blender_bin no configurado en el agent"}
+                break
+            call_args["blender_bin"] = blender_bin
         try:
-            result = fn(**args)
+            result = fn(**call_args)
         except Exception as e:  # noqa: BLE001
             failed = {"index": i, "tool": tool_name, "error": f"{type(e).__name__}: {e}"}
             sys.stderr.write(traceback.format_exc())
@@ -127,8 +139,10 @@ def execute_psd_plan(
 
 
 def is_psd_plan(plan: list[dict]) -> bool:
-    """Detecta si un plan debe ejecutarse con el executor PSD (no Blender)."""
+    """Detecta si un plan debe ejecutarse con este executor (no el de Blender
+    genérico) — export_psd y uv_retexture, que manejan su propio ciclo de
+    vida de Blender (o no lo necesitan en absoluto)."""
     if not plan:
         return False
-    psd_tools = {"export_psd"}
+    psd_tools = {"export_psd", "uv_retexture"}
     return all(step.get("tool") in psd_tools for step in plan)
