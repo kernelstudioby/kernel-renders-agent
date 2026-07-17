@@ -219,7 +219,9 @@ def _render_uv_pass_exr(
         if line.startswith("KERNEL_UV_RENDER_OK:"):
             return json.loads(line[len("KERNEL_UV_RENDER_OK:"):])
     raise RuntimeError(
-        "El render de los pases UV no terminó correctamente. "
+        f"El render de los pases UV no terminó correctamente (returncode={result.returncode} — "
+        "un valor negativo o muy alto suele indicar que Blender/el driver de GPU crasheó, no un "
+        "error de Python). "
         f"stdout (últimas líneas): {result.stdout[-1500:]}\nstderr: {result.stderr[-1500:]}"
     )
 
