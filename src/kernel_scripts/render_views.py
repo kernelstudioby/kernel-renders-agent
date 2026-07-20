@@ -471,6 +471,23 @@ def run_render_one_view(
                 )
             except AttributeError:
                 pass
+            # CRÍTICO: "Transparent Glass" (Film > Transparent) es un ajuste de
+            # Cycles, no de render.film_transparent (ese sí se copia abajo).
+            # La fresh scene se crea con Cycles en sus defaults — sin esto,
+            # "Transparent Glass" vuelve a False aunque Moy lo haya activado
+            # en el .blend, y el vidrio sale sobre-expuesto/blanco en vez de
+            # transparente. Reportado por Moy: "sale como si estuviera
+            # desactivada" en el cuello/tapa de la botella.
+            for attr in ("film_transparent_glass", "film_transparent_roughness"):
+                try:
+                    setattr(fresh_render_scene.cycles, attr, getattr(original_scene.cycles, attr))
+                except AttributeError:
+                    pass
+            print(
+                f"[render fresh] film_transparent_glass heredado="
+                f"{getattr(fresh_render_scene.cycles, 'film_transparent_glass', 'n/a')}",
+                flush=True,
+            )
         fresh_render_scene.render.image_settings.file_format = "PNG"
         try:
             fresh_render_scene.render.image_settings.color_mode = "RGBA"
