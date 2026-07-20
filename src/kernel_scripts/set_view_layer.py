@@ -76,19 +76,30 @@ def run_set_active_view_layer(
     except (AttributeError, TypeError, ReferenceError):
         pass
 
-    # 4. Aplicar la visibilidad del view_layer a nivel de Collection Y de
-    # Object. Por qué dos niveles:
+    # 4. Aplicar la EXCLUSIÓN del view_layer a nivel de Collection Y de
+    # Object — pero SOLO en la dirección "ocultar". Por qué dos niveles:
     #   - collection.hide_render: scene-wide, persiste si la scene se reusa.
     #   - object.hide_render: propiedad del objeto. CRÍTICO: render_views.py
     #     a veces crea una "fresh scene" para sortear locks de file_format.
     #     En esa fresh scene los layer_collections del original no existen,
     #     y los objetos se linkean directo a la fresh scene perdiendo la
     #     visibilidad de collection. Pero obj.hide_render viaja con el
-    #     objeto en el linkeo. Por eso marcamos AMBOS.
+    #     objeto en el linkeo. Por eso marcamos AMBOS al ocultar.
+    #
+    # NUNCA forzamos hide_render=False (mostrar) — reportado por Moy: el
+    # render "activaba" luces/objetos (ej. cap.001, la collection "lights")
+    # que él había ocultado a mano en el .blend, aunque su collection
+    # contenedora SÍ estuviera incluida en el view layer activo. La versión
+    # anterior sincronizaba hide_render en ambas direcciones (mostrar Y
+    # ocultar) según la inclusión de la collection, así que cualquier
+    # ocultamiento manual del artista dentro de una collection visible se
+    # perdía en cuanto se llamaba a este tool (que corre en casi todos los
+    # planes, vía la regla "activar PRIMERO el view layer"). Ahora solo
+    # propagamos la exclusión hacia abajo (ocultar) — lo que ya estaba
+    # visible se deja intacto, y lo que el artista ocultó se queda oculto.
     collections_hidden = []
     collections_shown = []
     objects_hidden_count = 0
-    objects_shown_count = 0
     objects_errored: list[str] = []
 
     # Tipos de objeto que NUNCA deben ocultarse por exclude de view_layer.
@@ -97,8 +108,8 @@ def run_set_active_view_layer(
     # (parents, rigging) porque puede romper jerarquías de animación.
     _PROTECTED_OBJ_TYPES = {"CAMERA", "LIGHT", "LIGHT_PROBE", "EMPTY"}
 
-    def _set_obj_hide(obj, hide: bool) -> None:
-        """Set hide_render con manejo robusto de cualquier excepción.
+    def _hide_obj(obj) -> None:
+        """Fuerza hide_render=True con manejo robusto de cualquier excepción.
 
         Antes el loop era frágil: una sola excepción no-AttributeError en un
         obj rompía la iteración y los siguientes objs no se procesaban. Ese
@@ -110,17 +121,12 @@ def run_set_active_view_layer(
         a la escena (Moy las usa cross-view-layer y romper su visibilidad
         causaba que el render usara la cámara incorrecta).
         """
-        nonlocal objects_hidden_count, objects_shown_count
+        nonlocal objects_hidden_count
         try:
-            if hide and getattr(obj, "type", None) in _PROTECTED_OBJ_TYPES:
-                # No ocultamos cámaras/luces aunque la collection esté excluida.
-                objects_shown_count += 1
+            if getattr(obj, "type", None) in _PROTECTED_OBJ_TYPES:
                 return
-            obj.hide_render = hide
-            if hide:
-                objects_hidden_count += 1
-            else:
-                objects_shown_count += 1
+            obj.hide_render = True
+            objects_hidden_count += 1
         except Exception as _e:  # noqa: BLE001
             objects_errored.append(f"{getattr(obj, 'name', '?')}: {_e}")
 
@@ -133,32 +139,35 @@ def run_set_active_view_layer(
         # los hijos efectivamente no rinden aunque su propio exclude sea False.
         effective_excluded = parent_excluded or this_excluded
         coll = lc.collection
-        try:
-            coll.hide_render = effective_excluded
-            if effective_excluded:
+        if effective_excluded:
+            try:
+                coll.hide_render = True
                 collections_hidden.append(coll.name)
-            else:
-                collections_shown.append(coll.name)
-        except AttributeError:
-            pass
+            except AttributeError:
+                pass
+        else:
+            # Solo tracking — NO tocamos coll.hide_render aquí. Si el artista
+            # la ocultó a mano (independiente de este view layer), se queda así.
+            collections_shown.append(coll.name)
         # Procesar AMBOS: objetos directos del collection (objects) y los de
         # sus children (all_objects). En la práctica all_objects ya incluye
         # los directos, pero iteramos ambos defensivamente y dedupeamos por
         # id() para que un fallo en uno no se propague al otro.
-        seen_ids: set[int] = set()
-        for source in (coll.objects, coll.all_objects):
-            try:
-                obj_list = list(source)
-            except Exception:  # noqa: BLE001
-                continue
-            for obj in obj_list:
-                if obj is None:
+        if effective_excluded:
+            seen_ids: set[int] = set()
+            for source in (coll.objects, coll.all_objects):
+                try:
+                    obj_list = list(source)
+                except Exception:  # noqa: BLE001
                     continue
-                oid = id(obj)
-                if oid in seen_ids:
-                    continue
-                seen_ids.add(oid)
-                _set_obj_hide(obj, effective_excluded)
+                for obj in obj_list:
+                    if obj is None:
+                        continue
+                    oid = id(obj)
+                    if oid in seen_ids:
+                        continue
+                    seen_ids.add(oid)
+                    _hide_obj(obj)
         for child in lc.children:
             _walk_layer_collections(child, effective_excluded)
 
@@ -180,7 +189,6 @@ def run_set_active_view_layer(
         "collections_hidden": collections_hidden,
         "collections_shown": collections_shown,
         "objects_hidden_count": objects_hidden_count,
-        "objects_shown_count": objects_shown_count,
         "objects_errored": objects_errored,
         "success": True,
     }
