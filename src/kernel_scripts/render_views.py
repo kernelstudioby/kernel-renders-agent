@@ -520,7 +520,37 @@ def run_render_one_view(
         # World (HDRI/environment)
         if original_scene.world:
             fresh_render_scene.world = original_scene.world
-        # Linkear objetos visibles a la collection raíz
+
+        # Calcular qué objetos quedan efectivamente ocultos por RENDER en la
+        # escena original vía collection.hide_render (scene-wide, independiente
+        # del view layer — ej. Moy desactiva la collection "lights" completa a
+        # mano en el outliner). Esto es necesario porque al linkear todo a
+        # target_collection (flat, root nueva) se pierde la jerarquía de
+        # collections original — un objeto cuya única señal de estar oculto
+        # era heredarlo de una collection padre (coll.hide_render=True) sale
+        # visible en la scene fresh si no propagamos ese estado al objeto
+        # mismo antes de relinkear. Reproducido con un caso real: escena con
+        # collection "lights" en hide_render=True pero varias luces adentro
+        # con su propio hide_render=False (dependen 100% del override de la
+        # collection) — al pasar por este workaround (necesario porque el
+        # file_format de la escena estaba locked a EXR_MULTILAYER) esas luces
+        # se veían "activadas" en el render final, aunque Moy las tenía
+        # apagadas en el .blend.
+        effectively_hidden = set()
+
+        def _collect_hidden(coll, ancestor_hidden):
+            hidden_here = ancestor_hidden or bool(getattr(coll, "hide_render", False))
+            if hidden_here:
+                for obj in coll.all_objects:
+                    effectively_hidden.add(obj.name)
+            for child in coll.children:
+                _collect_hidden(child, hidden_here)
+
+        _collect_hidden(original_scene.collection, False)
+
+        # Linkear objetos a la collection raíz de la scene fresh (flat —
+        # pierde la jerarquía original, ver nota arriba) y preservar el
+        # hide_render efectivo que tenían antes de la aplanada.
         target_collection = fresh_render_scene.collection
         for obj in original_scene.objects:
             try:
@@ -528,6 +558,8 @@ def run_render_one_view(
             except RuntimeError:
                 # ya linkeado o conflicto, ignorar
                 pass
+            if obj.name in effectively_hidden:
+                obj.hide_render = True
         # Camera
         if original_camera is not None:
             fresh_render_scene.camera = original_camera
