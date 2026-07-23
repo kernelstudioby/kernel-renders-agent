@@ -70,6 +70,7 @@ def run_render_one_view(
     resolution_y: int | None = None,
     output_format: str = "PNG",
     frame: int | None = None,
+    apply_postfx: bool = False,
 ) -> dict[str, Any]:
     """Renderiza UNA cámara de la escena.
 
@@ -92,6 +93,19 @@ def run_render_one_view(
             (`rotation_frames` reportado por scene_metadata) en vez de armar
             cámaras extra. Si None, respeta el frame_current guardado en el
             .blend (comportamiento previo, sin cambios).
+        apply_postfx: default False (comportamiento previo, sin cambios) —
+            el compositor (pestaña "Compositing" del .blend, node tree con
+            Exposure/Color Correction/Crypto Matte/etc.) se deshabilita
+            siempre antes de renderizar, así que el output es el pase RAW
+            sin procesar. KER-344: con apply_postfx=True, se respeta
+            use_nodes/use_compositing tal cual estén en el .blend en vez de
+            forzarlos a False — el output final pasa por el compositor
+            (equivalente al "Composite" que Moy ve en el Image Editor de
+            Blender). Se deshabilitaban por default porque compositors con
+            denoise/threads async a veces dejaban el proceso de Blender sin
+            terminar — ya no es un riesgo real: el daemon fuerza os._exit()
+            al terminar el plan (ver executor.py), así que no hay motivo
+            para bloquearlo cuando el usuario lo pide explícitamente.
 
     Returns:
         dict con output_path, duration, success.
@@ -244,16 +258,21 @@ def run_render_one_view(
         # de bpy.ops.render.render() y bloquean el exit de Blender (síntoma:
         # el .exr aparece en disco pero el proceso no termina). El compositor
         # con denoise nodes y el multiview son los culpables más comunes.
-        for attr, val in (
-            ("use_multiview", False),
-            ("use_compositing", False),
-        ):
-            try:
-                setattr(blender_scene.render, attr, val)
-            except AttributeError:
-                pass
+        # KER-344: use_compositing/use_nodes se fuerzan explícitamente según
+        # apply_postfx (no solo "saltar" el disable) — otro step del mismo
+        # plan pudo haber dejado el compositor apagado de una corrida previa
+        # en la misma sesión de Blender; sin el set explícito a True, un
+        # apply_postfx=True posterior heredaría ese estado apagado.
         try:
-            blender_scene.use_nodes = False
+            blender_scene.render.use_multiview = False
+        except AttributeError:
+            pass
+        try:
+            blender_scene.render.use_compositing = apply_postfx
+        except AttributeError:
+            pass
+        try:
+            blender_scene.use_nodes = apply_postfx
         except AttributeError:
             pass
         try:
@@ -325,12 +344,18 @@ def run_render_one_view(
         blender_scene.render.views_format = "STEREO_3D"
     except (AttributeError, TypeError):
         pass
+    # KER-344: use_compositing/use_nodes se fuerzan explícitamente según
+    # apply_postfx — no solo se "saltan" cuando True, para no heredar un
+    # estado apagado por un step previo del mismo plan en esta sesión de
+    # Blender. True = respeta/aplica el compositor del .blend (equivalente
+    # al "Composite" del Image Editor); False = pase RAW (default, sin
+    # cambios de comportamiento).
     try:
-        blender_scene.render.use_compositing = False
+        blender_scene.render.use_compositing = apply_postfx
     except AttributeError:
         pass
     try:
-        blender_scene.use_nodes = False
+        blender_scene.use_nodes = apply_postfx
     except AttributeError:
         pass
     # Deshabilitar todas las views excepto la default
@@ -537,6 +562,36 @@ def run_render_one_view(
         # World (HDRI/environment)
         if original_scene.world:
             fresh_render_scene.world = original_scene.world
+
+        # KER-344: si apply_postfx=True, heredar el compositor (Blender 5.x
+        # lo expone como scene.compositing_node_group — un node group ID
+        # compartible, ya no scene.node_tree embebido). La fresh scene se
+        # crea sin compositor (use_nodes=False, sin node group asignado) —
+        # sin esto, apply_postfx no tendría efecto en escenas que necesitan
+        # este workaround (el caso típico: formato locked a EXR_MULTILAYER,
+        # justo lo que dispara este bloque).
+        if apply_postfx:
+            try:
+                fresh_render_scene.use_nodes = original_scene.use_nodes
+            except AttributeError:
+                pass
+            try:
+                fresh_render_scene.compositing_node_group = (
+                    original_scene.compositing_node_group
+                )
+            except AttributeError:
+                pass
+            try:
+                fresh_render_scene.render.use_compositing = True
+            except AttributeError:
+                pass
+            print(
+                f"[render fresh] postfx heredado: use_nodes="
+                f"{getattr(fresh_render_scene, 'use_nodes', 'n/a')} "
+                f"compositing_node_group="
+                f"{getattr(fresh_render_scene, 'compositing_node_group', 'n/a')}",
+                flush=True,
+            )
 
         # Calcular qué objetos quedan efectivamente ocultos por RENDER en la
         # escena original vía collection.hide_render (scene-wide, independiente
@@ -1214,6 +1269,11 @@ TOOL_SCHEMA_ONE = {
                 "type": "string",
                 "enum": ["PNG", "EXR", "EXR_MULTILAYER"],
                 "description": "PNG default. EXR para post-prod (single layer 32-bit HDR). EXR_MULTILAYER guarda passes (diffuse, specular, depth, AOVs) — útil para compositing avanzado.",
+            },
+            "frame": {"type": "integer"},
+            "apply_postfx": {
+                "type": "boolean",
+                "description": "Default False (RAW, sin compositor). True aplica el compositor del .blend (Exposure/Color Correction/etc. en la pestaña Compositing) al output final.",
             },
         },
         "required": ["scene", "output_path"],
