@@ -20,14 +20,21 @@ def run_set_active_view_layer(
 
     Args:
         scene: Ruta absoluta al .blend.
-        view_layer_name: Nombre exacto del view layer (case-sensitive).
-            Convención Beyond: 'dry' (seco) o 'sweaty' (con condensación).
+        view_layer_name: Nombre del view layer. Convención Beyond: 'dry'
+            (seco) o 'sweaty' (con condensación) — pero no todas las
+            escenas siguen la convención al pie de la letra (reportado:
+            GLOBAL_354ML_&_355ML_SQUADCAN.blend usa 'DRY'/'SWEATY' en
+            mayúsculas). El match es tolerante a mayúsculas/minúsculas —
+            mismo patrón que _resolve_camera_name en render_views.py — para
+            no romper cuando la AI manda la convención estándar en
+            minúsculas mientras la escena real está en otro cased.
 
     Returns:
         dict con previous_view_layer, new_view_layer, available_view_layers.
 
     Raises:
-        FileNotFoundError, ValueError si el view layer no existe.
+        FileNotFoundError, ValueError si el view layer no existe (ni exacto
+            ni case-insensitive).
 
     Side effects:
         Modifica `scene.window.view_layer` y guarda el .blend.
@@ -40,10 +47,22 @@ def run_set_active_view_layer(
     available = [vl.name for vl in blender_scene.view_layers]
 
     if view_layer_name not in available:
-        raise ValueError(
-            f"View layer '{view_layer_name}' no existe. "
-            f"Disponibles: {available}"
-        )
+        # Fallback case-insensitive — ej. la AI pide 'sweaty' (convención
+        # Beyond en minúsculas) pero la escena real tiene 'SWEATY'.
+        target = view_layer_name.lower()
+        matches = [vl for vl in available if vl.lower() == target]
+        if len(matches) == 1:
+            print(
+                f"[set_view_layer] '{view_layer_name}' resuelto a '{matches[0]}' "
+                f"(match case-insensitive)",
+                flush=True,
+            )
+            view_layer_name = matches[0]
+        else:
+            raise ValueError(
+                f"View layer '{view_layer_name}' no existe. "
+                f"Disponibles: {available}"
+            )
 
     # 2. Capturar estado previo
     previous = None
