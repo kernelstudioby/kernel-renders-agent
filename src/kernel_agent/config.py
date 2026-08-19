@@ -30,6 +30,14 @@ class AgentConfig:
     # se puedan exportar a multi-resolución desde la UI. Si está vacía, no se
     # reporta nada y la sección Export Pack queda sin PSDs de este agent.
     psds_dir: str = ""
+    # Catálogo local de productos UV pre-renderizados. Puede apuntar a la
+    # carpeta `Productos` o a la raíz de UV Mapper que la contiene.
+    uv_products_dir: str = ""
+    # Límite del cache RAM de escenas UV reducidas para preview.
+    uv_cache_max_mb: int = 768
+    # API HTTP solo-loopback para que la UI web tenga preview UV interactivo
+    # usando CPU/RAM de esta misma PC, sin crear jobs ni subir PNGs.
+    uv_preview_port: int = 8765
     poll_interval_seconds: int = 5
     # Telemetría que se manda al server en cada poll
     gpu_info: dict = field(default_factory=dict)
@@ -70,12 +78,15 @@ def load_config() -> AgentConfig:
         "LIBRARY_DIR": "library_dir",
         "OUTPUT_DIR": "output_dir",
         "PSDS_DIR": "psds_dir",
+        "UV_PRODUCTS_DIR": "uv_products_dir",
+        "UV_CACHE_MAX_MB": "uv_cache_max_mb",
+        "UV_PREVIEW_PORT": "uv_preview_port",
         "POLL_INTERVAL_SECONDS": "poll_interval_seconds",
     }
     for env_key, attr in env_map.items():
         val = os.environ.get(env_key)
         if val:
-            if attr == "poll_interval_seconds":
+            if attr in {"poll_interval_seconds", "uv_cache_max_mb", "uv_preview_port"}:
                 setattr(cfg, attr, int(val))
             else:
                 setattr(cfg, attr, val)

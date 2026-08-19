@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kernel-renders-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Render Agent para Kernel Renders. Corre en la PC con GPU, hace polling a la plataforma web y ejecuta Blender headless contra escenas locales."
 authors = [{ name = "Kernel Studio" }]
 requires-python = ">=3.10"
@@ -19,6 +19,7 @@ dependencies = [
   "Pillow>=10.0.0",
   "numpy>=1.26.0",
   "OpenEXR>=3.3.0",
+  "opencv-python-headless>=4.10.0,<5",
 ]
 
 [project.optional-dependencies]

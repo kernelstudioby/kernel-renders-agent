@@ -58,6 +58,8 @@ class ApiClient:
         blender_version: str | None = None,
         library_scenes: list[dict] | None = None,
         library_psds: list[dict] | None = None,
+        capability: str | None = None,
+        uv_product_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Hace heartbeat al server y pide el siguiente job. Devuelve {agent, job?}.
 
@@ -73,7 +75,19 @@ class ApiClient:
             params["library"] = json.dumps(library_scenes)
         if library_psds is not None:
             params["psds"] = json.dumps(library_psds)
+        if capability:
+            params["capability"] = capability
+        if uv_product_ids is not None:
+            params["uv_products"] = json.dumps(uv_product_ids)
         return self._request("GET", "/api/agent/poll", params=params)
+
+    def sync_uv_catalog(self, products: list[dict[str, Any]]) -> dict[str, Any]:
+        """Sincroniza metadatos UV; los EXR y paths absolutos nunca viajan."""
+        return self._request(
+            "POST",
+            "/api/agent/catalog/uv/sync",
+            json={"products": products},
+        )
 
     def claim(self, job_id: str) -> dict[str, Any]:
         """Reclama un job atómicamente. Devuelve {job} o 409 si otro agent ya lo tomó."""

@@ -110,6 +110,7 @@ def status() -> None:
     table.add_row("Blender", cfg.blender_bin)
     table.add_row("Library", cfg.library_dir)
     table.add_row("Output", cfg.output_dir)
+    table.add_row("UV Products", cfg.uv_products_dir or "(desactivado)")
     table.add_row("Polling", f"{cfg.poll_interval_seconds}s")
     table.add_row("GPU", cfg.gpu_info.get("backend", "?") + " · " + (", ".join(cfg.gpu_info.get("devices", [])) or "CPU"))
     table.add_row("Blender ver.", cfg.blender_version or "?")

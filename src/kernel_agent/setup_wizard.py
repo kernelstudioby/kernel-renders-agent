@@ -66,6 +66,18 @@ def _default_output_dir() -> str:
     return str(home / "Downloads" / "kernel-renders")
 
 
+def _default_uv_products_dir() -> str:
+    home = Path.home()
+    candidates = [
+        home / "Downloads" / "uvmapper (1)" / "uvmapper" / "Productos",
+        home / "Documents" / "Kernel Renders" / "UV Products",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
 def run_wizard() -> AgentConfig:
     """Ejecuta el wizard. Retorna la config guardada."""
     existing = load_config()
@@ -144,12 +156,27 @@ def run_wizard() -> AgentConfig:
     )
     Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # 6. Polling
+    # 6. UV Lab V2 (opcional). Vacío mantiene el agent Blender-only.
+    cfg.uv_products_dir = Prompt.ask(
+        "Carpeta de productos UV ([dim]opcional, Enter para desactivar[/dim])",
+        default=existing.uv_products_dir or _default_uv_products_dir(),
+    ).strip()
+    if cfg.uv_products_dir and not Path(cfg.uv_products_dir).exists():
+        console.print(f"[yellow]Aviso: todavía no existe {cfg.uv_products_dir}[/yellow]")
+    if cfg.uv_products_dir:
+        cfg.uv_preview_port = int(
+            Prompt.ask(
+                "Puerto local de preview UV",
+                default=str(existing.uv_preview_port or 8765),
+            )
+        )
+
+    # 7. Polling
     cfg.poll_interval_seconds = int(
         Prompt.ask("Intervalo de polling (segundos)", default=str(existing.poll_interval_seconds or 5))
     )
 
-    # 7. GPU detect
+    # 8. GPU detect
     console.print()
     console.print("[dim]Detectando GPU (puede tardar ~30s, abrir Blender headless)...[/dim]")
     gpu = detect_gpu(cfg.blender_bin)
@@ -165,6 +192,9 @@ def run_wizard() -> AgentConfig:
     table.add_row("Blender", cfg.blender_bin)
     table.add_row("Library", cfg.library_dir)
     table.add_row("Output", cfg.output_dir)
+    table.add_row("UV Products", cfg.uv_products_dir or "(desactivado)")
+    if cfg.uv_products_dir:
+        table.add_row("UV Preview local", f"http://127.0.0.1:{cfg.uv_preview_port}")
     table.add_row("Polling", f"{cfg.poll_interval_seconds}s")
     table.add_row("GPU backend", gpu.get("backend", "?"))
     table.add_row("GPU devices", ", ".join(gpu.get("devices", [])) or "(ninguna)")

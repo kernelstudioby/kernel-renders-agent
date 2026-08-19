@@ -17,6 +17,8 @@ from .library_scan import scan_blend_files_with_view_layers
 from .psd_executor import execute_psd_plan, is_psd_plan
 from .psd_scan import scan_psd_files
 from .storage import upload_blend_for_download, upload_render
+from .uv_preview_server import UvPreviewServer
+from .uv_worker import UvWorker
 
 log = logging.getLogger("kernel-agent.daemon")
 
@@ -55,6 +57,7 @@ class _Heartbeat:
                     gpu_info=self.cfg.gpu_info or None,
                     blender_version=self.cfg.blender_version or None,
                     library_scenes=None,  # no contaminar cada heartbeat con escaneo de disco
+                    capability="heartbeat",
                 )
             except Exception:  # noqa: BLE001
                 # No fallar el render por error de telemetría. Silencioso a propósito.
@@ -108,28 +111,42 @@ class AgentDaemon:
         log.info("Render Agent online · server=%s", self.cfg.server_url)
         log.info("Polling cada %ss", self.cfg.poll_interval_seconds)
 
-        backoff = self.cfg.poll_interval_seconds
-        max_backoff = 60
-        while not self.should_stop:
-            try:
-                self._tick()
-                backoff = self.cfg.poll_interval_seconds  # reset
-            except ApiError as e:
-                log.warning("API error %s: %s — retry in %ss", e.status_code, e.message, backoff)
-                if e.status_code == 401:
-                    log.error("Token inválido o revocado. Detén el agent y corre `kernel-agent setup`.")
+        uv_worker = UvWorker(self.cfg) if self.cfg.uv_products_dir else None
+        uv_preview = UvPreviewServer(self.cfg) if self.cfg.uv_products_dir else None
+        if uv_worker:
+            uv_worker.start()
+            log.info("UV lane online · products=%s", self.cfg.uv_products_dir)
+        if uv_preview:
+            uv_preview.start()
+
+        try:
+            backoff = self.cfg.poll_interval_seconds
+            max_backoff = 60
+            while not self.should_stop:
+                try:
+                    self._tick()
+                    backoff = self.cfg.poll_interval_seconds  # reset
+                except ApiError as e:
+                    log.warning("API error %s: %s — retry in %ss", e.status_code, e.message, backoff)
+                    if e.status_code == 401:
+                        log.error("Token inválido o revocado. Detén el agent y corre `kernel-agent setup`.")
+                        return
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+                except KeyboardInterrupt:
+                    log.info("Interrumpido por usuario. Bye.")
                     return
-                time.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
-            except KeyboardInterrupt:
-                log.info("Interrumpido por usuario. Bye.")
-                return
-            except Exception as e:  # noqa: BLE001
-                log.exception("Error inesperado: %s — retry in %ss", e, backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
-            else:
-                time.sleep(self.cfg.poll_interval_seconds)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Error inesperado: %s — retry in %ss", e, backoff)
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, max_backoff)
+                else:
+                    time.sleep(self.cfg.poll_interval_seconds)
+        finally:
+            if uv_worker:
+                uv_worker.stop()
+            if uv_preview:
+                uv_preview.stop()
 
     def _tick(self) -> None:
         """Una iteración: poll + (si hay job) claim + execute + complete."""
@@ -145,6 +162,7 @@ class AgentDaemon:
             blender_version=self.cfg.blender_version or None,
             library_scenes=library_scenes,
             library_psds=library_psds,
+            capability="blender",
         )
         blend_download = result.get("blend_download")
         if blend_download:
@@ -167,8 +185,6 @@ class AgentDaemon:
         job = claim_resp["job"]
 
         plan = job.get("plan", [])
-        total_steps = len(plan)
-
         def _on_step(cur: int, total: int, msg: str, extras: dict | None = None) -> None:
             try:
                 self.client.progress(job_id, cur, total, message=msg, extras=extras)
