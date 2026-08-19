@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.2
+# Kernel Renders Agent 0.2.1
 
 Servicio Python único que corre en la PC de producción. Mantiene el carril de
 renders Blender y agrega el carril UV Lab V2 para composición 2D nativa, sin
@@ -18,7 +18,7 @@ token UNA SOLA VEZ y lo entrega a quien va a instalar el agent en su PC.
 
 ## Prerequisitos
 
-- Python 3.10+
+- Python 3.13 recomendado en Windows (`3.10 <= Python < 3.14`)
 - Blender 5.1+ instalado
 - GPU compatible con OptiX / CUDA / HIP / ONEAPI (recomendado, no obligatorio)
 - Carpeta local de UV Mapper que contenga `Productos`, con las escenas de prueba
@@ -29,22 +29,25 @@ token UNA SOLA VEZ y lo entrega a quien va a instalar el agent en su PC.
 ```powershell
 git clone https://github.com/kernelstudioby/kernel-renders-agent.git
 cd kernel-renders-agent
-py -m pip install -U pip
-py -m pip install -e .
+py -3.13 -m pip install -U pip
+py -3.13 -m pip install -e .
 ```
+
+> Python 3.14 no se usa todavía: OpenEXR no publica wheel de Windows para esa
+> versión y `pip` intentaría compilarlo localmente con CMake/Visual Studio.
 
 Si Moy ya lo tiene instalado:
 
 ```powershell
 cd C:\ruta\a\kernel-renders-agent
 git pull origin main
-py -m pip install -e .
+py -3.13 -m pip install -e .
 ```
 
 ## Configuración (una vez)
 
 ```powershell
-kernel-agent setup
+py -3.13 -m kernel_agent setup
 ```
 
 El wizard pregunta:
@@ -67,13 +70,13 @@ La config se guarda en (depende del SO):
 
 ```powershell
 # Verificar config
-kernel-agent status
+py -3.13 -m kernel_agent status
 
 # Diagnóstico (Blender, GPU, conectividad)
-kernel-agent doctor
+py -3.13 -m kernel_agent doctor
 
 # Arrancar el daemon
-kernel-agent run
+py -3.13 -m kernel_agent run
 ```
 
 El agente debe permanecer abierto mientras se use la plataforma. En el arranque

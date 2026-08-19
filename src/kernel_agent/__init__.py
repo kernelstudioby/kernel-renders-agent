@@ -7,4 +7,4 @@ escenas locales. Sube los renders a Supabase Storage.
 Patrón de auth: api_key estática por agente (stilo Kernel Pack CEP).
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
