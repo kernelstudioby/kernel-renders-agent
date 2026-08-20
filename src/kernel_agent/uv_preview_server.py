@@ -121,6 +121,7 @@ class UvPreviewServer:
                         product_id=str(body["product_id"]),
                         view_id=str(body["view_id"]),
                         label_url=str(body["label_url"]),
+                        texture_checksum=str(body.get("texture_checksum") or "") or None,
                         state=state,
                         max_dim=int(body.get("max_dim", 640)),
                         cache_max_mb=owner.cfg.uv_cache_max_mb,

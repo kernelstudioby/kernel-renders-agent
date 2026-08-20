@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 import tempfile
 import threading
 import time
@@ -11,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 # OpenCV lee EXR solo si la bandera existe ANTES de importar el módulo.
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
@@ -45,6 +48,15 @@ _MAX_TEXTURE_CACHE_ITEMS = 12
 _CLEAN_UV_CACHE: OrderedDict[tuple[int, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
 _CLEAN_UV_CACHE_LOCK = threading.Lock()
 _MAX_CLEAN_UV_CACHE_ITEMS = 8
+_MAX_REMOTE_TEXTURE_BYTES = 100 * 1024 * 1024
+_MAX_REMOTE_TEXTURE_REDIRECTS = 4
+_ALLOWED_REMOTE_TEXTURE_TYPES = {
+    "application/octet-stream",
+    "image/jpeg",
+    "image/png",
+    "image/tiff",
+    "image/webp",
+}
 
 
 def _nbytes(value: Any) -> int:
@@ -126,29 +138,97 @@ def _cached_scene(view_path: Path, max_dim: int, cache_max_mb: int) -> dict[str,
     return scene
 
 
+def _validate_remote_texture_url(source: str) -> None:
+    """Rechaza URLs que puedan convertir el preview loopback en un proxy local."""
+    parsed = urlsplit(source)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("la textura remota debe usar HTTPS")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("URL de textura remota inválida")
+    if parsed.port not in {None, 443}:
+        raise ValueError("puerto de textura remota no autorizado")
+
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror as exc:
+        raise ValueError("no se pudo resolver el host de la textura") from exc
+    if not addresses:
+        raise ValueError("el host de la textura no tiene una dirección válida")
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("el host de la textura devolvió una dirección inválida") from exc
+        if not ip.is_global:
+            raise ValueError("host de textura remoto no autorizado")
+
+
+def _remote_texture_suffix(content_type: str) -> str:
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/tiff": ".tif",
+        "image/webp": ".webp",
+    }.get(content_type, ".img")
+
+
+def _download_remote_texture(source: str, work_dir: Path) -> Path:
+    current_url = source
+    with httpx.Client(timeout=60, follow_redirects=False) as client:
+        for redirect_count in range(_MAX_REMOTE_TEXTURE_REDIRECTS + 1):
+            _validate_remote_texture_url(current_url)
+            with client.stream(
+                "GET",
+                current_url,
+                headers={"Accept": "image/png,image/jpeg,image/tiff,image/webp"},
+            ) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location or redirect_count == _MAX_REMOTE_TEXTURE_REDIRECTS:
+                        raise ValueError("la textura excedió el límite de redirecciones")
+                    current_url = urljoin(current_url, location)
+                    continue
+
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                if content_type not in _ALLOWED_REMOTE_TEXTURE_TYPES:
+                    raise ValueError("el archivo remoto no es una textura compatible")
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > _MAX_REMOTE_TEXTURE_BYTES:
+                    raise ValueError("la textura remota supera 100 MB")
+
+                target = (work_dir / "label").with_suffix(_remote_texture_suffix(content_type))
+                total_bytes = 0
+                with target.open("wb") as handle:
+                    for chunk in response.iter_bytes():
+                        total_bytes += len(chunk)
+                        if total_bytes > _MAX_REMOTE_TEXTURE_BYTES:
+                            raise ValueError("la textura remota supera 100 MB")
+                        handle.write(chunk)
+                if total_bytes == 0:
+                    raise ValueError("la textura remota está vacía")
+                return target
+    raise ValueError("no se pudo descargar la textura remota")
+
+
 def _materialize_label(source: str, work_dir: Path) -> Path:
     if source.lower().startswith(("http://", "https://")):
-        target = work_dir / "label"
-        with httpx.stream("GET", source, follow_redirects=True, timeout=60) as response:
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            suffix = ".png" if "png" in content_type else ".img"
-            target = target.with_suffix(suffix)
-            with target.open("wb") as handle:
-                for chunk in response.iter_bytes():
-                    handle.write(chunk)
-        return target
+        return _download_remote_texture(source, work_dir)
     path = Path(source).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"etiqueta no encontrada: {source}")
     return path
 
 
-def _cached_texture(source: str) -> dict[str, Any]:
+def _cached_texture(source: str, cache_key: str | None = None) -> dict[str, Any]:
+    key = cache_key or source
     with _TEXTURE_CACHE_LOCK:
-        cached = _TEXTURE_CACHE.get(source)
+        cached = _TEXTURE_CACHE.get(key)
         if cached is not None:
-            _TEXTURE_CACHE.move_to_end(source)
+            _TEXTURE_CACHE.move_to_end(key)
             return cached
 
     with tempfile.TemporaryDirectory(prefix="kernel_uv_texture_") as temp:
@@ -156,8 +236,8 @@ def _cached_texture(source: str) -> dict[str, Any]:
         texture = core._load_export_texture(str(label_path))
 
     with _TEXTURE_CACHE_LOCK:
-        _TEXTURE_CACHE[source] = texture
-        _TEXTURE_CACHE.move_to_end(source)
+        _TEXTURE_CACHE[key] = texture
+        _TEXTURE_CACHE.move_to_end(key)
         while len(_TEXTURE_CACHE) > _MAX_TEXTURE_CACHE_ITEMS:
             _TEXTURE_CACHE.popitem(last=False)
     return texture
@@ -252,6 +332,8 @@ def run_uv_compose(
     product_id: str,
     view_id: str,
     label_url: str,
+    texture_id: str | None = None,
+    texture_checksum: str | None = None,
     state: dict[str, Any] | None = None,
     max_dim: int = 900,
     cache_max_mb: int = 768,
@@ -263,17 +345,15 @@ def run_uv_compose(
     render_state = _merge_state(scene, state or {})
     render_scene = _scene_with_clean_uv(scene, render_state)
 
-    with tempfile.TemporaryDirectory(prefix="kernel_uv_") as temp:
-        label_path = _materialize_label(label_url, Path(temp))
-        texture = core._load_export_texture(str(label_path))
-        composite = core.render_frame(
-            render_scene,
-            texture,
-            render_state,
-            bool((state or {}).get("wrap", False)),
-            core.FLIP_V,
-            use_mipmap=bool((state or {}).get("mipmap", False)),
-        )
+    texture = _cached_texture(label_url, texture_checksum or texture_id)
+    composite = core.render_frame(
+        render_scene,
+        texture,
+        render_state,
+        bool((state or {}).get("wrap", False)),
+        core.FLIP_V,
+        use_mipmap=bool((state or {}).get("mipmap", False)),
+    )
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -299,6 +379,7 @@ def render_uv_preview_png(
     product_id: str,
     view_id: str,
     label_url: str,
+    texture_checksum: str | None = None,
     state: dict[str, Any] | None = None,
     max_dim: int = 640,
     cache_max_mb: int = 768,
@@ -309,7 +390,7 @@ def render_uv_preview_png(
     scene = _cached_scene(view_path, max_dim, cache_max_mb)
     render_state = _merge_state(scene, state or {})
     render_scene = _scene_with_clean_uv(scene, render_state)
-    texture = _cached_texture(label_url)
+    texture = _cached_texture(label_url, texture_checksum)
 
     # OpenCV/Numpy liberan el GIL en parte, pero el motor original mantiene
     # buffers compartidos. Serializar previews evita picos de RAM al arrastrar.
