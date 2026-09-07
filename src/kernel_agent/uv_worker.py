@@ -13,6 +13,7 @@ from .config import AgentConfig
 from .storage import upload_render
 from .uv_catalog import scan_uv_products
 from .uv_executor import execute_uv_plan, is_uv_plan
+from .uv_thumbnails import attach_thumbnails
 
 log = logging.getLogger("kernel-agent.uv-worker")
 
@@ -43,7 +44,10 @@ class UvWorker:
                 try:
                     now = time.monotonic()
                     if now >= self._next_catalog_scan:
-                        self._catalog = scan_uv_products(self.cfg.uv_products_dir)
+                        catalog = scan_uv_products(self.cfg.uv_products_dir)
+                        with suppress(Exception):
+                            catalog = attach_thumbnails(catalog, self.cfg.uv_products_dir, client)
+                        self._catalog = catalog
                         self._next_catalog_scan = now + 60
                     products = self._catalog
                     signature = "|".join(
