@@ -340,7 +340,7 @@ def run_uv_compose(
     output_name: str | None = None,
 ) -> dict[str, Any]:
     view_path = resolve_view_path(products_dir, product_id, view_id)
-    max_dim = max(256, min(2048, int(max_dim)))
+    max_dim = max(256, min(4000, int(max_dim)))
     scene = _cached_scene(view_path, max_dim, cache_max_mb)
     render_state = _merge_state(scene, state or {})
     render_scene = _scene_with_clean_uv(scene, render_state)
