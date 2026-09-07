@@ -82,7 +82,7 @@ DEFAULT_BLEND = {"Base": "Multiply", "Especular": "Add (Linear Dodge)"}
 
 # Umbral por defecto de limpieza de costuras UV (equivalente al "Edges
 # Threshold %" de RE:Map). 0 = desactivado.
-DEFAULT_EDGES_THRESHOLD = 0.5
+DEFAULT_EDGES_THRESHOLD = 0.0
 
 # Nombre de la región usada en el modo "dual" (label0/label1)
 LABEL_REGION_NAME = "Etiqueta"
