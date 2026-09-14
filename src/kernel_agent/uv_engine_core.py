@@ -122,6 +122,18 @@ SUDADO_NORMAL_ENCODING = "auto"
 SUDADO_DISTORTION_STRENGTH_DEFAULT = 0.06
 SUDADO_NORMAL_THRESHOLD = 0.02
 
+# Algunas variantes de liquido (PASS-liquid_*.exr) se exportan cubriendo
+# solo el area donde el liquido es visible a traves del envase -- la
+# geometria que queda fuera de esa area (ej. tapa/cuello) no recibe luz en
+# esa pasada y sale practicamente negra. Como no hay forma de distinguir
+# "liquido real muy oscuro" de "zona sin cubrir" mirando un solo pixel, se
+# usa la luminancia del pase de liquido como confianza: por debajo de
+# _LOW se asume "sin datos" y se usa base_label1 (el pase bajo luz normal,
+# que si cubre todo el objeto) como respaldo; por encima de _HIGH se
+# confia por completo en el pase de liquido; en medio se mezclan ambos.
+LIQUID_NODATA_LUMA_LOW = 0.02
+LIQUID_NODATA_LUMA_HIGH = 0.08
+
 # ============================================================
 #  NUCLEO (sin interfaz) -- funciones reutilizables
 # ============================================================
@@ -891,7 +903,14 @@ def render_dual_frame(data, tex, state, wrap, flip_v, use_mipmap=True):
     base0 = data["base_label0"]
     variants = data.get("liquid_variants")
     if variants:
-        base0 = variants.get(state.get("selected_liquid"), base0)
+        liquid = variants.get(state.get("selected_liquid"), base0)
+        if liquid is not base0:
+            liquid_luma = liquid.mean(axis=2, keepdims=True)
+            span = max(LIQUID_NODATA_LUMA_HIGH - LIQUID_NODATA_LUMA_LOW, 1e-6)
+            confidence = np.clip((liquid_luma - LIQUID_NODATA_LUMA_LOW) / span, 0.0, 1.0)
+            base0 = liquid * confidence + data["base_label1"] * (1.0 - confidence)
+        else:
+            base0 = liquid
 
     # Donde matte=1 se ve la etiqueta (con textura+especular); donde matte=0
     # se revela base_label0/líquido (producto sin etiqueta), sin cambios.
