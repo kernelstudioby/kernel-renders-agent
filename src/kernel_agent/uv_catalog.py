@@ -35,9 +35,16 @@ def _view_metadata(view_dir: Path) -> dict[str, Any] | None:
     has_uv = _find_pass(files, ("uvpass",))
     has_base = _find_pass(files, ("all_white", "base_label1", "base_label0"))
     has_base0 = _find_pass(files, ("base_label0",))
+    # .lower() aqui debe calzar exactamente con scan_liquid_variants() en
+    # uv_engine_core.py (motor de render), que usa el nombre en minusculas
+    # como clave interna de state["selected_liquid"]. Si aqui se reportara
+    # el nombre tal cual viene del archivo (ej. "Mango"), un archivo
+    # PASS-liquid_Mango.exr generaria una opcion "Mango" en la UI que el
+    # motor no reconoceria (el diccionario interno usa "mango") -- la
+    # variante se "detecta" pero seleccionarla no cambia nada al renderizar.
     liquid_names = sorted(
         {
-            match.group(1)
+            match.group(1).lower()
             for file in files
             if (match := LIQUID_RE.search(file.name)) is not None
         }
@@ -45,9 +52,15 @@ def _view_metadata(view_dir: Path) -> dict[str, Any] | None:
     if not has_uv or (not has_base and not liquid_names):
         return None
 
+    # .capitalize() (no .title()) para calzar con scan_track_mattes() en
+    # uv_engine_core.py: "Cap" hoy da lo mismo con ambos, pero un nombre de
+    # dos palabras (ej. "back_label") daria "Back label" en el motor vs
+    # "Back Label" aqui si se usara .title() -- mismo problema de
+    # nomenclatura que liquid_names, solo que todavia no se habia topado
+    # con un track matte de mas de una palabra.
     track_regions = sorted(
         {
-            match.group(1).replace("_", " ").title()
+            match.group(1).replace("_", " ").strip().capitalize()
             for file in files
             if (match := TRACK_MATTE_RE.search(file.name)) is not None
         }
