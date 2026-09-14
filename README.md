@@ -19,7 +19,13 @@ token UNA SOLA VEZ y lo entrega a quien va a instalar el agent en su PC.
 ## Prerequisitos
 
 - Python 3.13 recomendado en Windows (`3.10 <= Python < 3.14`)
-- Blender 5.1+ instalado
+- **Blender 5.2 LTS instalado (obligatorio, no solo "5.1+")** — KER3-40: escenas
+  armadas con el addon Render Raw en Blender 5.2 pueden renderizar en NEGRO
+  con `apply_postfx=true` si el agente corre en una versión más vieja (ej.
+  5.1). Confirmado reproduciendo el bug en 5.1 y viendo el mismo .blend
+  renderizar correctamente en 5.2 — Blender rompe silenciosamente datos de
+  nodos de curva (`Float Curve`) del compositor al abrir un archivo de una
+  versión más nueva en una más vieja.
 - GPU compatible con OptiX / CUDA / HIP / ONEAPI (recomendado, no obligatorio)
 - Carpeta local de UV Mapper que contenga `Productos`, con las escenas de prueba
 - Acceso a internet de salida (HTTPS 443)
