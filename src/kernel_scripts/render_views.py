@@ -106,6 +106,14 @@ def run_render_one_view(
             terminar — ya no es un riesgo real: el daemon fuerza os._exit()
             al terminar el plan (ver executor.py), así que no hay motivo
             para bloquearlo cuando el usuario lo pide explícitamente.
+            KER3-40: si apply_postfx=True da un render en NEGRO (alpha/forma
+            correctos, RGB en 0) con un .blend que usa un addon de compositor
+            de terceros (ej. Render Raw), NO es un bug de este código —
+            confirmado que es Blender abriendo un .blend de una version mas
+            nueva en una mas vieja y corrompiendo silenciosamente datos de
+            nodos de curva del compositor. Verificar que la version de
+            Blender del agente coincida (o sea mas nueva) que la usada para
+            armar el .blend — ver README.md, seccion Prerequisitos.
 
     Returns:
         dict con output_path, duration, success.
