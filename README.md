@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.2.4
+# Kernel Renders Agent 0.2.5
 
 Servicio Python único que corre en la PC de producción. Mantiene el carril de
 renders Blender y agrega el carril UV Lab V2 para composición 2D nativa, sin
