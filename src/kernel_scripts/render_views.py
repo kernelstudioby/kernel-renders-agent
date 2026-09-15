@@ -59,6 +59,62 @@ def _resolve_camera_name(name: str, all_cams: list) -> Any | None:
     return None
 
 
+def _active_view_layer_name(scene: Any) -> str | None:
+    """Nombre del único view layer con use=True en `scene` (o None)."""
+    return next((vl.name for vl in scene.view_layers if vl.use), None)
+
+
+def _retarget_compositor_render_layers(scene: Any, active_layer_name: str | None) -> int:
+    """Repunta nodos Render Layers del compositor al view layer activo.
+
+    KER3-40 (seguimiento): en escenas con multiples view layers (Beyond usa
+    'dry'/'sweaty' para condensacion), el nodo CompositorNodeRLayers que
+    alimenta un compositor de terceros (ej. addon Render Raw) queda con
+    `.layer` fijo al nombre del view layer que estaba activo cuando el
+    artista armo/guardo el compositor — Blender NO lo actualiza solo cuando
+    `set_active_view_layer` activa otro. Resultado reportado por Moy: al
+    renderizar 2 view layers en un mismo plan con apply_postfx=True, solo
+    el que coincide con ese nodo "congelado" sale bien; el otro sale vacio
+    (el compositor lee el buffer de un view layer que nunca se renderizo
+    en esta sesion de Blender). Fix: antes de cada render con postfx,
+    re-apuntar cualquier CompositorNodeRLayers (recursivo, incluye grupos
+    anidados tipo Render Raw) al view layer que se acaba de activar. Solo
+    toca `.layer` en memoria — nunca se guarda al .blend.
+    """
+    if not active_layer_name:
+        return 0
+    comp_tree = getattr(scene, "compositing_node_group", None) or getattr(scene, "node_tree", None)
+    if comp_tree is None:
+        return 0
+    retargeted = 0
+    seen_trees: set[int] = set()
+
+    def _walk(tree) -> None:
+        nonlocal retargeted
+        if tree is None or id(tree) in seen_trees:
+            return
+        seen_trees.add(id(tree))
+        for node in tree.nodes:
+            if node.bl_idname == "CompositorNodeRLayers":
+                node_scene = getattr(node, "scene", None)
+                if node_scene is None:
+                    continue
+                available = [vl.name for vl in node_scene.view_layers]
+                if active_layer_name in available and node.layer != active_layer_name:
+                    print(
+                        f"[postfx] Render Layers node {node.name!r}: "
+                        f"layer {node.layer!r} -> {active_layer_name!r}",
+                        flush=True,
+                    )
+                    node.layer = active_layer_name
+                    retargeted += 1
+            elif node.bl_idname == "CompositorNodeGroup" and node.node_tree is not None:
+                _walk(node.node_tree)
+
+    _walk(comp_tree)
+    return retargeted
+
+
 def run_render_one_view(
     *,
     scene: str,
@@ -283,6 +339,10 @@ def run_render_one_view(
             blender_scene.use_nodes = apply_postfx
         except AttributeError:
             pass
+        if apply_postfx:
+            _retarget_compositor_render_layers(
+                blender_scene, _active_view_layer_name(blender_scene)
+            )
         try:
             for v in blender_scene.render.views:
                 v.use = v.name in ("left", "")
@@ -366,6 +426,10 @@ def run_render_one_view(
         blender_scene.use_nodes = apply_postfx
     except AttributeError:
         pass
+    if apply_postfx:
+        _retarget_compositor_render_layers(
+            blender_scene, _active_view_layer_name(blender_scene)
+        )
     # Deshabilitar todas las views excepto la default
     try:
         for view in blender_scene.render.views:
@@ -593,6 +657,9 @@ def run_render_one_view(
                 fresh_render_scene.render.use_compositing = True
             except AttributeError:
                 pass
+            _retarget_compositor_render_layers(
+                fresh_render_scene, _active_view_layer_name(original_scene)
+            )
             print(
                 f"[render fresh] postfx heredado: use_nodes="
                 f"{getattr(fresh_render_scene, 'use_nodes', 'n/a')} "
