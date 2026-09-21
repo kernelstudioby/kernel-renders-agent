@@ -703,6 +703,40 @@ def run_render_one_view(
 
         _collect_hidden(original_scene.collection, False)
 
+        # KER3-42: lo anterior solo ve collection.hide_render (scene-wide).
+        # Pero un view layer puede excluir una collection SOLO para ese view
+        # layer (LayerCollection.exclude, el checkbox del outliner en el
+        # panel de View Layer) sin tocar collection.hide_render — es
+        # justamente así como se arma la variante "dry" vs "sweaty" en
+        # escenas reales de Beyond (ej. "dry" excluye la collection de gotas
+        # de agua, "sweaty" la incluye). Al aplanar todo a una sola scene sin
+        # mirar el LayerCollection tree del view layer activo, la fresh scene
+        # terminaba renderizando siempre el mismo set de objetos sin importar
+        # qué view layer se había activado con set_active_view_layer —
+        # reportado por Moy: seleccionar 2 view layers (dry + sweaty) producía
+        # 2 renders idénticos en vez de una variante por cada uno.
+        active_vl_name = _active_view_layer_name(original_scene)
+        active_vl = original_scene.view_layers.get(active_vl_name) if active_vl_name else None
+        if active_vl is not None:
+
+            def _collect_hidden_layer(layer_coll, ancestor_hidden):
+                hidden_here = (
+                    ancestor_hidden
+                    or bool(layer_coll.exclude)
+                    or bool(getattr(layer_coll.collection, "hide_render", False))
+                )
+                if hidden_here:
+                    for obj in layer_coll.collection.all_objects:
+                        effectively_hidden.add(obj.name)
+                for child in layer_coll.children:
+                    _collect_hidden_layer(child, hidden_here)
+
+            _collect_hidden_layer(active_vl.layer_collection, False)
+            print(
+                f"[render fresh] view layer activo para visibilidad={active_vl_name!r}",
+                flush=True,
+            )
+
         # Linkear objetos a la collection raíz de la scene fresh (flat —
         # pierde la jerarquía original, ver nota arriba) y preservar el
         # hide_render efectivo que tenían antes de la aplanada.
