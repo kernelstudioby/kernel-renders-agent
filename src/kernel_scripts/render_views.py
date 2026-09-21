@@ -490,6 +490,14 @@ def run_render_one_view(
                     continue
                 if attr == "use_pass_combined":
                     continue
+                # KER3-42: "use_denoising" no guarda passes extra ni fuerza
+                # EXR_MULTILAYER (confirmado con test aislado) -- es el toggle
+                # real de "aplicar denoiser al render final" que Moy configura
+                # en el panel Denoise. El match "denois" en attr lo atrapaba
+                # y lo apagaba sin motivo en cada render. Solo nos interesan
+                # los flags que SÍ guardan passes adicionales.
+                if attr == "use_denoising":
+                    continue
                 try:
                     val = getattr(ns, attr)
                     if isinstance(val, bool) and val:
@@ -733,6 +741,38 @@ def run_render_one_view(
                 )
             except AttributeError:
                 pass
+            # KER3-42: la fresh scene nace con los defaults de Cycles --
+            # Noise Threshold, Min Samples, Time Limit y todo el bloque de
+            # Denoise (checkbox + Denoiser + Passes + Prefilter + Quality +
+            # Use GPU) NO se heredaban, a diferencia de samples (arriba) y
+            # cycles.device (más arriba). Reportado por Moy: "el denoise se
+            # está saltando" -- el render pasaba por este workaround (el
+            # mismo que dispara el .blend con file_format locked a
+            # EXR_MULTILAYER) y terminaba usando denoise/threshold default
+            # de Blender en vez de los que Moy configuró en el .blend.
+            for attr in (
+                "use_adaptive_sampling",
+                "adaptive_threshold",
+                "adaptive_min_samples",
+                "time_limit",
+                "use_denoising",
+                "denoiser",
+                "denoising_prefilter",
+                "denoising_input_passes",
+                "denoising_quality",
+                "denoising_use_gpu",
+            ):
+                try:
+                    setattr(fresh_render_scene.cycles, attr, getattr(original_scene.cycles, attr))
+                except (AttributeError, TypeError):
+                    pass
+            print(
+                f"[render fresh] denoise heredado: use_denoising="
+                f"{getattr(fresh_render_scene.cycles, 'use_denoising', 'n/a')} "
+                f"denoiser={getattr(fresh_render_scene.cycles, 'denoiser', 'n/a')} "
+                f"adaptive_threshold={getattr(fresh_render_scene.cycles, 'adaptive_threshold', 'n/a')}",
+                flush=True,
+            )
         elif normalized_engine == "BLENDER_EEVEE":
             try:
                 fresh_render_scene.eevee.taa_render_samples = (
