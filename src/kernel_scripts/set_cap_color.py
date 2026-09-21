@@ -71,11 +71,35 @@ def run_set_cap_color(
     # 4. Capturar color previo y aplicar el nuevo
     previous = tuple(base_color_input.default_value[:3])
 
-    # Si el Base Color está conectado a otro nodo (textura, mix, etc.), avisamos
-    # pero igual cambiamos el default_value — útil cuando lo desconectan después.
+    # KER3-42: cuando Base Color esta conectado a otro nodo, cambiar solo el
+    # default_value del socket no tiene ningun efecto en el render -- Blender
+    # usa el valor que entrega el nodo conectado (el link), no el default_value
+    # del input mientras el link exista. El código anterior ponia el
+    # default_value de todos modos y reportaba "success" sin cambiar nada
+    # visible.
+    #
+    # Si el nodo conectado es un Color simple (ShaderNodeRGB, el típico "Color"
+    # con la rueda de color), actualizamos su output en su lugar -- eso sí
+    # se refleja en el render y conserva el setup de nodos de Moy. Para
+    # cualquier otro caso (textura, mix, group, etc.) desconectamos el link y
+    # forzamos el default_value: el usuario pidió un color específico y el
+    # render debe reflejarlo de forma determinista.
     was_linked = base_color_input.is_linked
+    retargeted_rgb_node = None
+    link_removed = False
 
-    base_color_input.default_value = (*new_color_linear, alpha_linear)
+    if was_linked:
+        link = base_color_input.links[0]
+        source_node = link.from_node
+        if source_node.bl_idname == "ShaderNodeRGB":
+            source_node.outputs[0].default_value = (*new_color_linear, alpha_linear)
+            retargeted_rgb_node = source_node.name
+        else:
+            mat.node_tree.links.remove(link)
+            base_color_input.default_value = (*new_color_linear, alpha_linear)
+            link_removed = True
+    else:
+        base_color_input.default_value = (*new_color_linear, alpha_linear)
 
     # NO guardamos. Cambios solo en memoria.
 
@@ -86,6 +110,8 @@ def run_set_cap_color(
         "new_color": new_color_linear,
         "rgb_hex": rgb_hex.upper() if rgb_hex.startswith("#") else f"#{rgb_hex.upper()}",
         "was_linked_warning": was_linked,
+        "retargeted_rgb_node": retargeted_rgb_node,
+        "link_removed": link_removed,
         "success": True,
     }
 
