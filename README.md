@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.2.10
+# Kernel Renders Agent 0.3.0
 
 Servicio Python único que corre en la PC de producción. Mantiene el carril de
 renders Blender y agrega el carril UV Lab V2 para composición 2D nativa, sin
@@ -100,9 +100,12 @@ Cuando se usa UV Lab:
 
 1. El agente sincroniza únicamente nombres y metadatos del catálogo local.
 2. Los sliders llaman al preview loopback; el PNG temporal no pasa por Vercel.
-3. `Guardar versión` crea un job persistente y sube solo el PNG final.
-4. Los PSD, texturas fuente y archivos de escena UV permanecen en la PC.
-5. Las texturas remotas se descargan únicamente por HTTPS, con límite de
+3. Si el navegador no está en la misma PC que el agente (loopback no
+   disponible), el preview cae a un canal remoto: el agente lo revisa en el
+   mismo poll loop del UV lane y sube el PNG por Vercel (KER3-43).
+4. `Guardar versión` crea un job persistente y sube solo el PNG final.
+5. Los PSD, texturas fuente y archivos de escena UV permanecen en la PC.
+6. Las texturas remotas se descargan únicamente por HTTPS, con límite de
    tamaño y validación de destino para impedir accesos a redes locales.
 
 ## Comprobación rápida de UV Lab

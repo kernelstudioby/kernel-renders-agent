@@ -12,7 +12,7 @@ from .api_client import ApiClient, ApiError
 from .config import AgentConfig
 from .storage import upload_render
 from .uv_catalog import scan_uv_products
-from .uv_executor import execute_uv_plan, is_uv_plan
+from .uv_executor import execute_uv_plan, is_uv_plan, render_uv_preview_png
 from .uv_thumbnails import attach_thumbnails
 
 log = logging.getLogger("kernel-agent.uv-worker")
@@ -68,6 +68,7 @@ class UvWorker:
                     job = result.get("job")
                     if job:
                         self._handle_job(client, job)
+                    self._handle_pending_preview(client)
                     backoff = self.cfg.poll_interval_seconds
                 except ApiError as exc:
                     log.warning("UV API error %s: %s", exc.status_code, exc.message)
@@ -125,3 +126,38 @@ class UvWorker:
             )
         client.complete_success(job_id, renders)
         log.info("UV job %s OK · %.2fs", job_id, result.duration_seconds)
+
+    def _handle_pending_preview(self, client: ApiClient) -> None:
+        """KER3-43: atiende un pedido de preview UV remoto, si hay uno.
+
+        Reusa exactamente `render_uv_preview_png` — la misma función que ya
+        usa el servidor loopback (127.0.0.1:8765) — así que el resultado es
+        idéntico sin importar si el browser está en esta PC o no.
+        """
+        try:
+            request = client.fetch_pending_uv_preview()
+        except ApiError:
+            return
+        if not request:
+            return
+        request_id = request["id"]
+        try:
+            png = render_uv_preview_png(
+                products_dir=self.cfg.uv_products_dir,
+                product_id=str(request["product_id"]),
+                view_id=str(request["view_id"]),
+                label_url=str(request["label_url"]),
+                texture_checksum=str(request.get("texture_checksum") or "") or None,
+                state=request.get("state") or {},
+                max_dim=int(request.get("max_dim", 640)),
+                cache_max_mb=self.cfg.uv_cache_max_mb,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Preview UV remoto %s falló: %s", request_id, exc)
+            with suppress(ApiError):
+                client.fail_uv_preview(request_id, f"{type(exc).__name__}: {exc}")
+            return
+        try:
+            client.complete_uv_preview(request_id, png)
+        except ApiError as exc:
+            log.warning("No se pudo subir preview UV remoto %s: %s", request_id, exc)
