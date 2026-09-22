@@ -192,6 +192,34 @@ class ApiClient:
             json={"error": error[:2000]},
         )
 
+    # --- KER3-43: preview UV remoto (fallback cuando el browser no está en
+    # la misma PC que el agent y el loopback 127.0.0.1:8765 no aplica) ---
+
+    def fetch_pending_uv_preview(self) -> dict[str, Any] | None:
+        """Consulta si hay un pedido de preview UV remoto pendiente para este
+        agent. Devuelve el dict del pedido o None si no hay nada."""
+        result = self._request("GET", "/api/agent/uv-preview/pending")
+        request = result.get("request")
+        return request if isinstance(request, dict) else None
+
+    def complete_uv_preview(self, request_id: str, png_bytes: bytes) -> None:
+        """Sube el PNG del preview remoto y marca el pedido como 'done'."""
+        import base64
+
+        self._request(
+            "POST",
+            f"/api/agent/uv-preview/{request_id}/complete",
+            json={"png_base64": base64.b64encode(png_bytes).decode("ascii")},
+        )
+
+    def fail_uv_preview(self, request_id: str, error: str) -> None:
+        """Marca un pedido de preview UV remoto como fallido."""
+        self._request(
+            "POST",
+            f"/api/agent/uv-preview/{request_id}/complete",
+            json={"error": error[:2000]},
+        )
+
     def upload_thumbnail(self, png_bytes: bytes, hash_hex: str) -> str | None:
         """Sube el thumbnail extraído de un .blend; devuelve URL pública o None.
 
