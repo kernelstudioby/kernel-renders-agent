@@ -1125,6 +1125,15 @@ def build_scene(view_folder):
     if base1_file and base1_has_alpha:
         output_alpha = np.clip(base1_img[:, :, 3], 0.0, 1.0).astype(np.float32)
 
+    # KER3-36: pase OPCIONAL de opacidad (PASS-opacity.exr). Negro = total
+    # transparencia, blanco = se ve tal cual. Es el último paso: si existe,
+    # REEMPLAZA al alfa derivado de PASS-all_white (que no distinguía las
+    # zonas sin datos, ej. la franja del cuello, y las dejaba con banda
+    # negra). Si la vista no lo trae, se conserva el comportamiento anterior.
+    opacity_file = find_pass_file(files, "opacity")
+    if opacity_file:
+        output_alpha = load_matte_gray(os.path.join(view_folder, opacity_file), U.shape)
+
     # Máscara de bordes (opcional): valores continuos 0..1 (promedio de
     # RGB, como cualquier otro matte de datos) que indican dónde el
     # composite final debe suavizarse -- típicamente una línea blanca sobre
