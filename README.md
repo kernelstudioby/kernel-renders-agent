@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.5.0
+# Kernel Renders Agent 0.6.0
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -184,6 +184,17 @@ color de muestra sigue el link del Base Color. Solo se reporta si algún
 componente tiene 2+ variantes, y `api_client.poll` quita `components` si la
 query del GET supera 12 000 caracteres para no perder el heartbeat.
 
+**Vistas por fotograma** (KER3-46): el mismo probe añade `frame_views`
+(`[{frame, name, angle}]`) para los keyframes del turntable más los frames con
+timeline marker (no usa `frame_start..frame_end`, que no refleja los keyframes).
+`name` es el primer marker del frame, tal cual lo nombró el artista (`FRONT`,
+`BACK`, `ESPECIAL`…) o `null`; `angle` es la rotación Z en grados de
+`NULL_ANIMATOR` evaluada en ese frame (1 decimal) o `null` si el objeto no
+existe. Sin markers ni `NULL_ANIMATOR` se reporta vacío; máximo 24 frames. Si la
+query del poll sigue grande tras quitar `components`, también se quita
+`frame_views`. Solo sirve para mostrar y para la IA: el render sigue recibiendo
+el número de frame.
+
 ### UV Lab (carril UV)
 
 Cada **vista** es una subcarpeta de un **producto** dentro de `Productos/`. Los
@@ -271,7 +282,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.5.0`. No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.5.0` (`agent-v0.6.0` tras el merge de KER3-46). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
