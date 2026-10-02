@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.4.0
+# Kernel Renders Agent 0.5.0
 
 Servicio Python único que corre en la PC de producción. Mantiene el carril de
 renders Blender y agrega el carril UV Lab V2 para composición 2D nativa, sin
@@ -147,6 +147,7 @@ kernel-renders-agent/
 │   └── kernel_scripts/       # (copia del paquete del monorepo)
 │       ├── swap_label.py
 │       ├── set_cap_color.py
+│       ├── apply_material_overrides.py  # variantes de material por componente (KER3-45)
 │       ├── set_view_layer.py
 │       ├── inspect_scene.py
 │       └── render_views.py
