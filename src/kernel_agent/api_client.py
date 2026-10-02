@@ -87,25 +87,53 @@ class ApiClient:
             params["capability"] = capability
         if uv_product_ids is not None:
             params["uv_products"] = json.dumps(uv_product_ids)
-        # La librería viaja en la query del GET; si crece de más, el poll
-        # fallaría y el agente quedaría offline. Se sacrifican primero los
-        # componentes de material (KER3-45) y luego las vistas por frame
-        # (KER3-46) antes que perder el heartbeat.
-        dropped: list[str] = []
-        for field in ("components", "frame_views"):
-            if not library_scenes or len(urlencode(params)) <= MAX_POLL_QUERY_CHARS:
-                break
-            dropped.append(field)
-            slim = [{k: v for k, v in s.items() if k not in dropped} for s in library_scenes]
-            params["library"] = json.dumps(slim, separators=(",", ":"))
-        if dropped and not self._warned_poll_size:
-            log.warning(
-                "poll: la query superaba %d caracteres; se omiten de la librería: %s",
-                MAX_POLL_QUERY_CHARS,
-                ", ".join(dropped),
-            )
-            self._warned_poll_size = True
+        if library_scenes and len(urlencode(params)) > MAX_POLL_QUERY_CHARS:
+            dropped = self._fit_library(params, library_scenes)
+            if dropped and not self._warned_poll_size:
+                log.warning(
+                    "poll: la query superaba %d caracteres; se omitió de la librería: %s",
+                    MAX_POLL_QUERY_CHARS,
+                    ", ".join(dropped),
+                )
+                self._warned_poll_size = True
         return self._request("GET", "/api/agent/poll", params=params)
+
+    @staticmethod
+    def _fit_library(params: dict[str, str], library_scenes: list[dict]) -> list[str]:
+        """La librería viaja en la query del GET; si crece de más, el poll
+        fallaría y el agente quedaría offline. Se recorta escena por escena:
+        primero `frame_views` (KER3-46, solo para mostrar; antes las vistas sin
+        nombre de marker, que solo aportan el ángulo) y al final `components`
+        (KER3-45, lo usa producción); dentro de cada grupo, la más pesada.
+        Recortar un campo en todas las escenas a la vez dejó sin selector de
+        materiales a una PC con 11 escenas (0.6.0)."""
+        slim = [dict(s) for s in library_scenes]
+
+        def encode() -> None:
+            params["library"] = json.dumps(slim, separators=(",", ":"))
+
+        def size(value: Any) -> int:
+            return len(json.dumps(value, separators=(",", ":")))
+
+        def named(views: list) -> bool:
+            return any(isinstance(v, list) and len(v) > 1 and v[1] for v in views)
+
+        dropped: list[str] = []
+        for field in ("frame_views", "components"):
+            order = sorted(
+                (i for i, s in enumerate(slim) if s.get(field)),
+                key=lambda i: (
+                    field == "frame_views" and named(slim[i][field]),
+                    -size(slim[i][field]),
+                ),
+            )
+            for i in order:
+                if len(urlencode(params)) <= MAX_POLL_QUERY_CHARS:
+                    return dropped
+                del slim[i][field]
+                dropped.append(f"{field} de {slim[i].get('name', '?')}")
+                encode()
+        return dropped
 
     def sync_uv_catalog(self, products: list[dict[str, Any]]) -> dict[str, Any]:
         """Sincroniza metadatos UV; los EXR y paths absolutos nunca viajan."""
