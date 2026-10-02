@@ -12,10 +12,21 @@ Forma: {
     "view_layers": [...],
     "cameras": [{"name": "Camera_Front", "is_active": True, "lens_mm": 50.0}],
     "rotation_frames": [1, 2, 3, 4],
+    "collection": "KOMX_DV_1L_PET/1L",
+    "components": [{"component": "Cap", "object": "Cap", "slot": 0,
+                    "current": "Cap_Yellow",
+                    "variants": [["Cap_Black", "#101010"], ...]}],
     "scanned_at": N
   },
   ...
 }
+
+KER3-45: `components` agrupa por prefijo del MATERIAL (texto antes del primer
+"_") los meshes de la colección del producto (recursivo; se saltan `Drops` y
+las colecciones de luces). Las variantes son todos los materiales del .blend
+con ese prefijo, incluidos los de Fake User sin asignar. Si ningún componente
+tiene 2+ variantes (escenas anteriores a la convención de nombres) no se
+reporta nada: no hay qué elegir y se evita inflar la query del poll.
 
 KER-273: `rotation_frames` son los keyframes del turntable del producto (ej.
 "vamos a rotar el producto usando los fotogramas 1/2/3/4 en vez de armar
@@ -102,11 +113,120 @@ for o in bpy.data.objects:
         best_children = n_children
         best_empty = sorted(frames)
 
+# --- KER3-45: componentes y variantes de material -------------------------
+MAX_COMPONENTS = 16
+MAX_VARIANTS = 32
+EXCLUDED_MATERIAL_PREFIXES = ('emissive', 'dropletmat')
+EXCLUDED_COMPONENTS = ('label',)
+
+def _prefix(name):
+    return name.split('_', 1)[0]
+
+def _node_tree(mat):
+    return getattr(mat, 'node_tree', None)
+
+def _has_emission_shader(mat):
+    nt = _node_tree(mat)
+    return bool(nt) and any(n.type == 'EMISSION' for n in nt.nodes)
+
+def _material_eligible(mat):
+    if mat is None:
+        return False
+    low = mat.name.lower()
+    if low.startswith(EXCLUDED_MATERIAL_PREFIXES):
+        return False
+    return not _has_emission_shader(mat)
+
+def _srgb_hex(rgb):
+    def enc(c):
+        c = max(0.0, min(1.0, float(c)))
+        return c * 12.92 if c <= 0.0031308 else 1.055 * (c ** (1 / 2.4)) - 0.055
+    return '#%02x%02x%02x' % tuple(int(round(enc(c) * 255)) for c in list(rgb)[:3])
+
+def _base_color(mat):
+    nt = _node_tree(mat)
+    principled = None
+    if nt:
+        for n in nt.nodes:
+            if n.type == 'BSDF_PRINCIPLED':
+                principled = n
+                break
+    if principled is None:
+        return list(mat.diffuse_color)[:3]
+    sock = principled.inputs.get('Base Color')
+    if sock is None:
+        return list(mat.diffuse_color)[:3]
+    if sock.is_linked:
+        node = sock.links[0].from_node
+        for _ in range(5):
+            if node.type == 'REROUTE' and node.inputs[0].is_linked:
+                node = node.inputs[0].links[0].from_node
+            else:
+                break
+        if node.type == 'RGB':
+            return list(node.outputs[0].default_value)[:3]
+    return list(sock.default_value)[:3]
+
+def _skip_collection(coll):
+    low = coll.name.lower()
+    return low.startswith('drops') or 'light' in low
+
+def _product_meshes(coll, path, acc):
+    for child in coll.children:
+        if _skip_collection(child):
+            continue
+        child_path = path + [child.name]
+        for o in child.objects:
+            if o.type == 'MESH':
+                acc.append((o, child_path))
+        _product_meshes(child, child_path, acc)
+
+meshes = []
+_product_meshes(s.collection, [], meshes)
+
+components = []
+collection_path = None
+seen_slots = set()
+for obj, cpath in meshes:
+    for idx, slot in enumerate(obj.material_slots):
+        mat = slot.material
+        if not _material_eligible(mat):
+            continue
+        prefix = _prefix(mat.name)
+        if prefix.lower() in EXCLUDED_COMPONENTS:
+            continue
+        key = (obj.name, idx)
+        if key in seen_slots:
+            continue
+        seen_slots.add(key)
+        variants = sorted(
+            (m for m in bpy.data.materials
+             if _prefix(m.name).lower() == prefix.lower() and _material_eligible(m)),
+            key=lambda m: m.name,
+        )[:MAX_VARIANTS]
+        components.append({
+            'component': prefix,
+            'object': obj.name,
+            'slot': idx,
+            'current': mat.name,
+            'variants': [[m.name, _srgb_hex(_base_color(m))] for m in variants],
+        })
+        if collection_path is None:
+            collection_path = '/'.join(cpath)
+components = components[:MAX_COMPONENTS]
+# Sin ninguna variante entre las que elegir (escenas viejas sin la convención
+# <Componente>_<Variante>) no hay selector: se reporta vacío.
+if not any(len(c['variants']) >= 2 for c in components):
+    components = []
+    collection_path = None
+
 out = {
     'view_layers': vls,
     'cameras': cams,
     'active_camera': active_cam_name,
     'rotation_frames': best_empty or [],
+    'collection': collection_path,
+    'components': components,
 }
 print('KERNEL_META_JSON:' + json.dumps(out))
 """
@@ -144,11 +264,37 @@ _EMPTY_METADATA: dict[str, Any] = {
     "cameras": [],
     "active_camera": None,
     "rotation_frames": [],
+    "collection": None,
+    "components": [],
 }
 
 
+def _sanitize_components(raw: Any) -> list[dict[str, Any]]:
+    """Valida lo que devuelve el probe (KER3-45): descarta entradas mal formadas."""
+    components: list[dict[str, Any]] = []
+    for c in raw or []:
+        if not isinstance(c, dict) or not c.get("component") or not c.get("object"):
+            continue
+        variants = [
+            [str(v[0]), str(v[1])]
+            for v in (c.get("variants") or [])
+            if isinstance(v, (list, tuple)) and len(v) == 2 and v[0]
+        ]
+        components.append(
+            {
+                "component": str(c["component"]),
+                "object": str(c["object"]),
+                "slot": int(c.get("slot", 0)),
+                "current": str(c.get("current", "")),
+                "variants": variants,
+            }
+        )
+    return components
+
+
 def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dict[str, Any]:
-    """Lanza Blender headless contra el .blend y extrae view_layers + cameras + rotation_frames."""
+    """Lanza Blender headless contra el .blend y extrae view_layers + cameras +
+    rotation_frames + componentes/variantes de material."""
     try:
         result = subprocess.run(
             [blender_bin, "--background", blend_path, "--python-expr", _BLENDER_PROBE_SCRIPT],
@@ -182,6 +328,10 @@ def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dic
                         "rotation_frames": sorted(
                             {int(f) for f in (payload.get("rotation_frames") or [])}
                         ),
+                        "collection": (
+                            str(payload["collection"]) if payload.get("collection") else None
+                        ),
+                        "components": _sanitize_components(payload.get("components")),
                     }
             except ValueError:
                 pass
@@ -206,11 +356,12 @@ def get_metadata_for_scenes(
     blender_bin: str,
     output_dir: str | None,
 ) -> dict[str, dict[str, Any]]:
-    """Para cada scene devuelve { view_layers, cameras, active_camera, rotation_frames }.
+    """Para cada scene devuelve { view_layers, cameras, active_camera,
+    rotation_frames, collection, components }.
 
     Usa cache disk-backed; solo abre Blender si el archivo cambió desde el
     último escaneo. Cache anterior que no tenía alguno de los campos nuevos
-    (`cameras`, `rotation_frames`) se re-escanea automáticamente.
+    (`cameras`, `rotation_frames`, `components`) se re-escanea automáticamente.
     """
     cache_path = _cache_path(output_dir)
     cache = _load_cache(cache_path)
@@ -236,32 +387,35 @@ def get_metadata_for_scenes(
             and isinstance(entry.get("view_layers"), list)
             and isinstance(entry.get("cameras"), list)
             and isinstance(entry.get("rotation_frames"), list)
+            and isinstance(entry.get("components"), list)
         ):
             result[cache_key] = {
                 "view_layers": entry["view_layers"],
                 "cameras": entry["cameras"],
                 "active_camera": entry.get("active_camera"),
                 "rotation_frames": entry["rotation_frames"],
+                "collection": entry.get("collection"),
+                "components": entry["components"],
             }
             continue
 
         # Cache miss: probe con Blender
         meta = _probe_metadata(blender_bin, path_str)
+        fields = {
+            "view_layers": meta["view_layers"],
+            "cameras": meta["cameras"],
+            "active_camera": meta["active_camera"],
+            "rotation_frames": meta["rotation_frames"],
+            "collection": meta["collection"],
+            "components": meta["components"],
+        }
         cache[cache_key] = {
             "mtime": int(stat.st_mtime),
             "size": stat.st_size,
-            "view_layers": meta["view_layers"],
-            "cameras": meta["cameras"],
-            "active_camera": meta["active_camera"],
-            "rotation_frames": meta["rotation_frames"],
+            **fields,
             "scanned_at": int(time.time()),
         }
-        result[cache_key] = {
-            "view_layers": meta["view_layers"],
-            "cameras": meta["cameras"],
-            "active_camera": meta["active_camera"],
-            "rotation_frames": meta["rotation_frames"],
-        }
+        result[cache_key] = fields
         cache_dirty = True
 
     if cache_dirty:

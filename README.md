@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.4.0
+# Kernel Renders Agent 0.5.0
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -151,7 +151,7 @@ Cancelar desde la UI mata el proceso de Blender en segundos y el agente **no**
 llama `complete` para no pisar el estado `cancelled`.
 
 **Tools de Blender** (`kernel_scripts`): `swap_label`, `set_cap_color`,
-`set_active_view_layer`, `inspect_scene`, `render_one_view` (`frame`,
+`apply_material_overrides`, `set_active_view_layer`, `inspect_scene`, `render_one_view` (`frame`,
 `apply_postfx`), `render_all_cameras`, `render_rotations` y `render_at_angle`.
 Fuera de Blender: `export_psd` (psd-tools), `uv_retexture` (UV Lab V1) y
 `uv_compose` (carril UV). Stubs no registrados: `render_seven_views`,
@@ -166,8 +166,23 @@ Fuera de Blender: `export_psd` (psd-tools), `uv_retexture` (UV Lab V1) y
   sampling/denoise (KER3-42) y la **visibilidad por view layer** (KER3-42).
 - `set_cap_color`: con Base Color conectado a un nodo, actualiza el nodo Color
   o desconecta el link y fuerza el valor (KER3-42).
+- `apply_material_overrides` (KER3-45): `{scene, overrides:[{object, slot,
+  material}]}` asigna el material al slot solo durante el render (el `.blend`
+  nunca se guarda) y falla listando las variantes disponibles si el objeto, el
+  slot o el material no existen. Un solo paso cubre todos los renders del plan.
 - `set_active_view_layer` nunca fuerza visibles los objetos que se ocultaron a
   mano.
+
+**Componentes y variantes de material** (KER3-45): el mismo probe de Blender que
+lee view layers, cámaras y fotogramas (`scene_metadata.py`) añade `collection` y
+`components` a cada escena de `library`. Agrupa por el **prefijo del material**
+(texto antes del primer `_`) los meshes de las colecciones del producto
+(recursivo; salta `Drops` y las de luces); las variantes son todos los materiales
+del `.blend` con ese prefijo (también los de Fake User sin asignar), sin
+`Emissive_*`, `DropletMat*`, materiales con emisión ni el componente `Label`. El
+color de muestra sigue el link del Base Color. Solo se reporta si algún
+componente tiene 2+ variantes, y `api_client.poll` quita `components` si la
+query del GET supera 12 000 caracteres para no perder el heartbeat.
 
 ### UV Lab (carril UV)
 
@@ -236,6 +251,7 @@ kernel-renders-agent/
 │   │   └── uv_thumbnails.py              miniaturas de producto para el picker
 │   └── kernel_scripts/       tools que corren dentro de Blender (salvo indicación)
 │       ├── swap_label.py · set_cap_color.py · set_view_layer.py · inspect_scene.py
+│       ├── apply_material_overrides.py   variantes de material por componente (KER3-45)
 │       ├── render_views.py               render_one_view / all_cameras / rotations / at_angle (+ stub seven_views)
 │       ├── export_pack.py                stub de Fase 4
 │       ├── psd_export.py                 export_psd (fuera de Blender: psd-tools + Pillow)
@@ -255,7 +271,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.4.0`. No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.5.0`. No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso

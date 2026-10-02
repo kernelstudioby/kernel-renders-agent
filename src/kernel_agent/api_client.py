@@ -12,9 +12,16 @@ Toda request lleva header `x-api-key: <token>`.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
+
+log = logging.getLogger(__name__)
+
+# Vercel rechaza URLs de ~14 KB; dejamos margen.
+MAX_POLL_QUERY_CHARS = 12_000
 
 
 class ApiError(Exception):
@@ -28,6 +35,7 @@ class ApiClient:
     def __init__(self, server_url: str, api_key: str, timeout: float = 30.0):
         self.server_url = server_url.rstrip("/")
         self.api_key = api_key
+        self._warned_poll_size = False
         self._client = httpx.Client(
             timeout=timeout,
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
@@ -72,13 +80,26 @@ class ApiClient:
         if blender_version:
             params["blender"] = blender_version
         if library_scenes is not None:
-            params["library"] = json.dumps(library_scenes)
+            params["library"] = json.dumps(library_scenes, separators=(",", ":"))
         if library_psds is not None:
             params["psds"] = json.dumps(library_psds)
         if capability:
             params["capability"] = capability
         if uv_product_ids is not None:
             params["uv_products"] = json.dumps(uv_product_ids)
+        if library_scenes and len(urlencode(params)) > MAX_POLL_QUERY_CHARS:
+            # La librería viaja en la query del GET; si crece de más, el poll
+            # fallaría y el agente quedaría offline. Se sacrifica `components`
+            # (KER3-45) antes que perder el heartbeat.
+            slim = [{k: v for k, v in s.items() if k != "components"} for s in library_scenes]
+            params["library"] = json.dumps(slim, separators=(",", ":"))
+            if not self._warned_poll_size:
+                log.warning(
+                    "poll: la query superaba %d caracteres; se omiten los componentes "
+                    "de material de la librería (KER3-45)",
+                    MAX_POLL_QUERY_CHARS,
+                )
+                self._warned_poll_size = True
         return self._request("GET", "/api/agent/poll", params=params)
 
     def sync_uv_catalog(self, products: list[dict[str, Any]]) -> dict[str, Any]:
