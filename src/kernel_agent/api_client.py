@@ -87,19 +87,24 @@ class ApiClient:
             params["capability"] = capability
         if uv_product_ids is not None:
             params["uv_products"] = json.dumps(uv_product_ids)
-        if library_scenes and len(urlencode(params)) > MAX_POLL_QUERY_CHARS:
-            # La librería viaja en la query del GET; si crece de más, el poll
-            # fallaría y el agente quedaría offline. Se sacrifica `components`
-            # (KER3-45) antes que perder el heartbeat.
-            slim = [{k: v for k, v in s.items() if k != "components"} for s in library_scenes]
+        # La librería viaja en la query del GET; si crece de más, el poll
+        # fallaría y el agente quedaría offline. Se sacrifican primero los
+        # componentes de material (KER3-45) y luego las vistas por frame
+        # (KER3-46) antes que perder el heartbeat.
+        dropped: list[str] = []
+        for field in ("components", "frame_views"):
+            if not library_scenes or len(urlencode(params)) <= MAX_POLL_QUERY_CHARS:
+                break
+            dropped.append(field)
+            slim = [{k: v for k, v in s.items() if k not in dropped} for s in library_scenes]
             params["library"] = json.dumps(slim, separators=(",", ":"))
-            if not self._warned_poll_size:
-                log.warning(
-                    "poll: la query superaba %d caracteres; se omiten los componentes "
-                    "de material de la librería (KER3-45)",
-                    MAX_POLL_QUERY_CHARS,
-                )
-                self._warned_poll_size = True
+        if dropped and not self._warned_poll_size:
+            log.warning(
+                "poll: la query superaba %d caracteres; se omiten de la librería: %s",
+                MAX_POLL_QUERY_CHARS,
+                ", ".join(dropped),
+            )
+            self._warned_poll_size = True
         return self._request("GET", "/api/agent/poll", params=params)
 
     def sync_uv_catalog(self, products: list[dict[str, Any]]) -> dict[str, Any]:

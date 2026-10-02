@@ -16,10 +16,16 @@ Forma: {
     "components": [{"component": "Cap", "object": "Cap", "slot": 0,
                     "current": "Cap_Yellow",
                     "variants": [["Cap_Black", "#101010"], ...]}],
+    "frame_views": [{"frame": 4, "name": "BACK", "angle": 153.5}],
     "scanned_at": N
   },
   ...
 }
+
+KER3-46: `frame_views` da, por cada fotograma seleccionable (keyframes del
+turntable + frames con timeline marker), el nombre de la vista (primer marker
+del frame, nombre libre puesto por el artista) y el ángulo Z en grados de
+`NULL_ANIMATOR` evaluado en ese frame. Sin markers ni NULL_ANIMATOR → vacío.
 
 KER3-45: `components` agrupa por prefijo del MATERIAL (texto antes del primer
 "_") los meshes de la colección del producto (recursivo; se saltan `Drops` y
@@ -220,6 +226,27 @@ if not any(len(c['variants']) >= 2 for c in components):
     components = []
     collection_path = None
 
+# --- KER3-46: nombre de vista (timeline marker) y ángulo por fotograma -----
+# Se evalúan los keyframes del turntable más los frames con marker, no
+# frame_start..frame_end: ese rango no refleja los keyframes reales (ver la
+# validación de `frame` en render_views.py).
+MAX_FRAME_VIEWS = 24
+import math
+markers = {}
+for m in s.timeline_markers:
+    markers.setdefault(m.frame, m.name)
+null_animator = bpy.data.objects.get('NULL_ANIMATOR')
+frame_views = []
+if markers or null_animator:
+    cur = s.frame_current
+    for f in sorted(set(best_empty or []) | set(markers))[:MAX_FRAME_VIEWS]:
+        angle = None
+        if null_animator:
+            s.frame_set(f)
+            angle = round(math.degrees(null_animator.rotation_euler.z), 1)
+        frame_views.append({'frame': f, 'name': markers.get(f), 'angle': angle})
+    s.frame_set(cur)
+
 out = {
     'view_layers': vls,
     'cameras': cams,
@@ -227,6 +254,7 @@ out = {
     'rotation_frames': best_empty or [],
     'collection': collection_path,
     'components': components,
+    'frame_views': frame_views,
 }
 print('KERNEL_META_JSON:' + json.dumps(out))
 """
@@ -266,7 +294,23 @@ _EMPTY_METADATA: dict[str, Any] = {
     "rotation_frames": [],
     "collection": None,
     "components": [],
+    "frame_views": [],
 }
+
+
+def _sanitize_frame_views(raw: Any) -> list[dict[str, Any]]:
+    """Valida lo que devuelve el probe (KER3-46): {frame, name|None, angle|None}."""
+    views: list[dict[str, Any]] = []
+    for v in raw or []:
+        if not isinstance(v, dict) or v.get("frame") is None:
+            continue
+        try:
+            frame = int(v["frame"])
+            angle = float(v["angle"]) if v.get("angle") is not None else None
+        except (TypeError, ValueError):
+            continue
+        views.append({"frame": frame, "name": str(v["name"]) if v.get("name") else None, "angle": angle})
+    return views
 
 
 def _sanitize_components(raw: Any) -> list[dict[str, Any]]:
@@ -294,7 +338,7 @@ def _sanitize_components(raw: Any) -> list[dict[str, Any]]:
 
 def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dict[str, Any]:
     """Lanza Blender headless contra el .blend y extrae view_layers + cameras +
-    rotation_frames + componentes/variantes de material."""
+    rotation_frames + componentes/variantes de material + vistas por frame."""
     try:
         result = subprocess.run(
             [blender_bin, "--background", blend_path, "--python-expr", _BLENDER_PROBE_SCRIPT],
@@ -332,6 +376,7 @@ def _probe_metadata(blender_bin: str, blend_path: str, timeout: int = 60) -> dic
                             str(payload["collection"]) if payload.get("collection") else None
                         ),
                         "components": _sanitize_components(payload.get("components")),
+                        "frame_views": _sanitize_frame_views(payload.get("frame_views")),
                     }
             except ValueError:
                 pass
@@ -357,11 +402,12 @@ def get_metadata_for_scenes(
     output_dir: str | None,
 ) -> dict[str, dict[str, Any]]:
     """Para cada scene devuelve { view_layers, cameras, active_camera,
-    rotation_frames, collection, components }.
+    rotation_frames, collection, components, frame_views }.
 
     Usa cache disk-backed; solo abre Blender si el archivo cambió desde el
     último escaneo. Cache anterior que no tenía alguno de los campos nuevos
-    (`cameras`, `rotation_frames`, `components`) se re-escanea automáticamente.
+    (`cameras`, `rotation_frames`, `components`, `frame_views`) se re-escanea
+    automáticamente.
     """
     cache_path = _cache_path(output_dir)
     cache = _load_cache(cache_path)
@@ -388,6 +434,7 @@ def get_metadata_for_scenes(
             and isinstance(entry.get("cameras"), list)
             and isinstance(entry.get("rotation_frames"), list)
             and isinstance(entry.get("components"), list)
+            and isinstance(entry.get("frame_views"), list)
         ):
             result[cache_key] = {
                 "view_layers": entry["view_layers"],
@@ -396,6 +443,7 @@ def get_metadata_for_scenes(
                 "rotation_frames": entry["rotation_frames"],
                 "collection": entry.get("collection"),
                 "components": entry["components"],
+                "frame_views": entry["frame_views"],
             }
             continue
 
@@ -408,6 +456,7 @@ def get_metadata_for_scenes(
             "rotation_frames": meta["rotation_frames"],
             "collection": meta["collection"],
             "components": meta["components"],
+            "frame_views": meta["frame_views"],
         }
         cache[cache_key] = {
             "mtime": int(stat.st_mtime),
