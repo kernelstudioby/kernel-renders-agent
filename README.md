@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.6.0
+# Kernel Renders Agent 0.6.1
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -181,19 +181,24 @@ lee view layers, cámaras y fotogramas (`scene_metadata.py`) añade `collection`
 del `.blend` con ese prefijo (también los de Fake User sin asignar), sin
 `Emissive_*`, `DropletMat*`, materiales con emisión ni el componente `Label`. El
 color de muestra sigue el link del Base Color. Solo se reporta si algún
-componente tiene 2+ variantes, y `api_client.poll` quita `components` si la
-query del GET supera 12 000 caracteres para no perder el heartbeat.
+componente tiene 2+ variantes.
 
 **Vistas por fotograma** (KER3-46): el mismo probe añade `frame_views`
-(`[{frame, name, angle}]`) para los keyframes del turntable más los frames con
+(`[{frame, name, angle}]`; en el poll viaja compacto como `[frame, name, angle]`)
+para los keyframes del turntable más los frames con
 timeline marker (no usa `frame_start..frame_end`, que no refleja los keyframes).
 `name` es el primer marker del frame, tal cual lo nombró el artista (`FRONT`,
 `BACK`, `ESPECIAL`…) o `null`; `angle` es la rotación Z en grados de
 `NULL_ANIMATOR` evaluada en ese frame (1 decimal) o `null` si el objeto no
-existe. Sin markers ni `NULL_ANIMATOR` se reporta vacío; máximo 24 frames. Si la
-query del poll sigue grande tras quitar `components`, también se quita
-`frame_views`. Solo sirve para mostrar y para la IA: el render sigue recibiendo
-el número de frame.
+existe. Sin markers ni `NULL_ANIMATOR` se reporta vacío; máximo 24 frames. Solo
+sirve para mostrar y para la IA: el render sigue recibiendo el número de frame.
+
+**Tamaño del poll:** la librería viaja en la query del GET (Vercel rechaza URLs
+de ~14 KB). Si supera 12 000 caracteres, `api_client.poll` recorta escena por
+escena, de la más pesada a la más ligera: primero `frame_views` y al final
+`components` (que usa producción). En 0.6.0 se quitaba `components` de todas
+las escenas a la vez y una PC con 11 escenas se quedó sin selector de
+materiales (0.6.1).
 
 ### UV Lab (carril UV)
 
@@ -282,7 +287,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.5.0` (`agent-v0.6.0` tras el merge de KER3-46). No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.6.0` (`agent-v0.6.1` tras el merge del fix del poll). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
