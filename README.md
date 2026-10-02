@@ -1,34 +1,52 @@
 # Kernel Renders Agent 0.5.0
 
-Servicio Python único que corre en la PC de producción. Mantiene el carril de
-renders Blender y agrega el carril UV Lab V2 para composición 2D nativa, sin
-abrir Blender. Hace polling a la plataforma web
-(`https://kernel-renders-web.vercel.app`) y reporta los resultados al servidor.
+Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
+interna de CGI de Beyond Design): ejecuta renders de Blender headless y
+composiciones UV (UV Lab V2) que le manda la plataforma web, y reporta los
+resultados. Se conecta **hacia afuera** (poll a la web y subida a Supabase
+Storage); no abre puertos a internet.
 
-Al ejecutar `kernel-agent run` se levantan, bajo la misma identidad del agente:
+> **Documentación del sistema completo** (arquitectura, API, modelo de datos,
+> protocolo, estado y pendientes): `docs/PROJECT.md` del repo privado
+> [`kernelstudioby/Kernel-Renders`](https://github.com/kernelstudioby/Kernel-Renders)
+> (acceso solo para el equipo). Historial de cambios: `docs/CHANGELOG.md` de ese repo.
 
-1. El worker de Blender para renders 3D.
-2. El worker UV para guardados finales en cola.
-3. El preview UV local en `http://127.0.0.1:8765`, usado por el navegador para
-   reflejar sliders en vivo con CPU/RAM de esa PC.
+## Por qué este repo es público
 
-Patrón de autenticación: **API key estática por agent** (estilo Kernel Pack
-CEP). El admin crea el agent en la UI web (`/settings/agents`), copia el
-token UNA SOLA VEZ y lo entrega a quien va a instalar el agent en su PC.
+Es **a propósito**. El agente se instala con `git clone` + `pip install -e .` en
+PCs externas con GPU (Beyond, demos) que se conectan al servidor, y exigir
+credenciales de un repo privado en cada máquina complicaría esas instalaciones.
+Por eso aquí **no hay secretos ni lógica de negocio**: la API key de cada agente
+vive solo en su `config.json` local (y es revocable desde la web), y el esquema
+de datos, la API y los diagramas viven en el repo privado. Nunca subas tokens,
+rutas privadas ni datos de clientes a este repo (decisión ADR-009 del repo web).
+
+## Qué levanta `kernel-agent run`
+
+Bajo una sola identidad (API key) corren estos componentes:
+
+| Componente | Qué hace |
+|---|---|
+| **Carril Blender** (hilo principal) | Escanea `library_dir` (y `psds_dir`), hace poll, reclama jobs, ejecuta el plan en Blender headless y sube los resultados |
+| **Heartbeat** | Mientras corre un job, hace heartbeat para que la web lo siga viendo online en renders largos |
+| **Carril UV** (`UvWorker`, si hay carpeta de Productos) | Sincroniza el catálogo UV, ejecuta jobs `uv_compose` y atiende los previews remotos; **no usa Blender** |
+| **Preview UV local** | Servidor HTTP solo-loopback en `http://127.0.0.1:8765` para que el navegador de esa misma PC refleje los sliders en vivo |
 
 ## Prerequisitos
 
-- Python 3.13 recomendado en Windows (`3.10 <= Python < 3.14`)
-- **Blender 5.2 LTS instalado (obligatorio, no solo "5.1+")** — KER3-40: escenas
-  armadas con el addon Render Raw en Blender 5.2 pueden renderizar en NEGRO
-  con `apply_postfx=true` si el agente corre en una versión más vieja (ej.
-  5.1). Confirmado reproduciendo el bug en 5.1 y viendo el mismo .blend
-  renderizar correctamente en 5.2 — Blender rompe silenciosamente datos de
-  nodos de curva (`Float Curve`) del compositor al abrir un archivo de una
-  versión más nueva en una más vieja.
-- GPU compatible con OptiX / CUDA / HIP / ONEAPI (recomendado, no obligatorio)
-- Carpeta local de UV Mapper que contenga `Productos`, con las escenas de prueba
-- Acceso a internet de salida (HTTPS 443)
+- Python **3.13** recomendado en Windows (`3.10 <= Python < 3.14`). Python 3.14
+  no se usa: OpenEXR no publica wheel de Windows para esa versión.
+- **Blender 5.2 LTS (obligatorio, no solo "5.1+")** — KER3-40: escenas armadas
+  con el addon Render Raw en Blender 5.2 pueden renderizar en NEGRO con
+  `apply_postfx=true` si el agente corre una versión más vieja: Blender rompe
+  en silencio los nodos de curva (`Float Curve`) del compositor al abrir un
+  archivo de una versión más nueva en una más vieja. El wizard autodetecta
+  Blender solo hasta 5.1 y `doctor` no valida la versión: escribe a mano la ruta
+  de 5.2.
+- GPU compatible con OptiX / CUDA / HIP / oneAPI (recomendado, no obligatorio).
+- Para UV Lab: una carpeta local `Productos` con los pases pre-renderizados
+  (convención más abajo).
+- Acceso a internet de salida (HTTPS 443).
 
 ## Instalación
 
@@ -39,10 +57,7 @@ py -3.13 -m pip install -U pip
 py -3.13 -m pip install -e .
 ```
 
-> Python 3.14 no se usa todavía: OpenEXR no publica wheel de Windows para esa
-> versión y `pip` intentaría compilarlo localmente con CMake/Visual Studio.
-
-Si Moy ya lo tiene instalado:
+Si ya lo tienes instalado (actualizar a una versión nueva):
 
 ```powershell
 cd C:\ruta\a\kernel-renders-agent
@@ -50,136 +65,247 @@ git pull origin main
 py -3.13 -m pip install -e .
 ```
 
+Como la instalación es editable, `git pull` basta para el código Python;
+`pip install -e .` solo es necesario si cambian las dependencias. No hay
+auto-update: hay que reiniciar `kernel_agent run` después de actualizar.
+
+> `psd-tools` **no** está en las dependencias: sin él, la tool `export_psd`
+> (Export Pack) falla y los thumbnails de PSD se omiten. Instálalo aparte
+> (`py -3.13 -m pip install psd-tools`) si esa PC procesa PSD.
+
 ## Configuración (una vez)
 
 ```powershell
 py -3.13 -m kernel_agent setup
 ```
 
-El wizard pregunta:
-1. URL del servidor (default: `https://kernel-renders-web.vercel.app`)
-2. API key del agent (cópiala del admin)
-3. Ruta a `blender.exe` (autodetect en Windows)
-4. Carpeta del library (donde están los `.blend`)
-5. Carpeta de output (donde guardar los renders)
-6. Carpeta UV (`Productos` o la raíz de UV Mapper que la contiene)
-7. Puerto de preview UV (dejar `8765` salvo que esté ocupado)
-8. Detecta GPU automáticamente
+El wizard pregunta, en orden:
 
-La config se guarda en (depende del SO):
+1. URL del servidor (default `https://kernel-renders-web.vercel.app`).
+2. **API key** del agente (`kr_agent_…`). La crea un admin en la web
+   (`/settings/agents` → nuevo agente) y el token **se muestra una sola vez**.
+   Se valida con un poll de prueba y de ahí sale el nombre del agente. Ojo: la
+   key se ve completa en pantalla; no compartas capturas.
+3. Ruta a `blender.exe` (**5.2**).
+4. Carpeta del library (`.blend` de Beyond).
+5. Carpeta de output (renders).
+6. Carpeta de productos UV (opcional; vacía desactiva el carril UV).
+7. Puerto del preview UV (default `8765`; solo si hay carpeta UV).
+8. Intervalo de polling en segundos (default `5`).
+9. Detecta la GPU abriendo Blender headless (~30 s).
+
+`psds_dir` **no** se pregunta en el wizard (solo con la variable `PSDS_DIR` o
+editando `config.json`). Si `setup` se traba con caracteres raros (`←[36m`), usa
+la consola clásica (`powershell.exe` o `cmd`), no `pwsh`.
+
+**Dónde se guarda** (`config.json`; en Unix con permisos 600):
 
 - Windows: `%LOCALAPPDATA%\KernelRendersAgent\config.json`
-- Mac: `~/Library/Application Support/KernelRendersAgent/config.json`
+- macOS: `~/Library/Application Support/KernelRendersAgent/config.json`
 - Linux: `~/.config/KernelRendersAgent/config.json`
 
-## Uso
+**Variables de entorno** (solo nombres; sobrescriben la config **si están
+exportadas en el entorno del proceso**; el agente **no lee archivos `.env`**
+aunque `.env.example` lo sugiera): `KERNEL_RENDERS_SERVER_URL`,
+`KERNEL_RENDERS_API_KEY`, `AGENT_NAME`, `BLENDER_BIN`, `LIBRARY_DIR`,
+`OUTPUT_DIR`, `PSDS_DIR`, `UV_PRODUCTS_DIR`, `UV_CACHE_MAX_MB` (default 768),
+`UV_PREVIEW_PORT` (default 8765), `POLL_INTERVAL_SECONDS` (default 5). Para
+probar contra una web local: `KERNEL_RENDERS_SERVER_URL=http://localhost:3000`.
+
+## Uso (CLI)
 
 ```powershell
-# Verificar config
-py -3.13 -m kernel_agent status
-
-# Diagnóstico (Blender, GPU, conectividad)
-py -3.13 -m kernel_agent doctor
-
-# Arrancar el daemon
-py -3.13 -m kernel_agent run
+py -3.13 -m kernel_agent status    # muestra la config actual
+py -3.13 -m kernel_agent doctor    # Blender, GPU (~30 s) y conectividad
+py -3.13 -m kernel_agent run       # arranca el agente; dejar la ventana abierta
+py -3.13 -m kernel_agent version   # ⚠ hoy imprime 0.2.2 (ver "Pendientes")
 ```
 
-El agente debe permanecer abierto mientras se use la plataforma. En el arranque
-correcto deben aparecer mensajes equivalentes a `UV lane online`,
-`Preview UV local online` y la conexión del carril Blender.
+Opción global `--log-level` (`DEBUG|INFO|WARNING|ERROR`, default `INFO`). El
+agente vive mientras la ventana esté abierta (no hay servicio de Windows todavía).
 
-Cuando llega un job 3D:
+En un arranque correcto aparecen `Render Agent online`, `UV lane online` y
+`Preview UV local online · http://127.0.0.1:8765`, y el agente sale online en
+`/settings/agents` con su versión de Blender.
 
-1. Llama `POST /api/agent/claim/:id` para reclamarlo atómicamente
-2. Ejecuta el plan con Blender headless (`blender --background --python`)
-3. Reporta progreso después de cada step (`POST /api/agent/progress`)
-4. Al terminar, reporta los renders (`POST /api/agent/complete`)
+## Cómo funciona
 
-Cuando se usa UV Lab:
+**Protocolo** (header `x-api-key` en todo; timeout 30 s; un `401` detiene el
+agente): `GET /api/agent/poll` (heartbeat + siguiente job; envía `gpu`,
+`blender`, `library`, `psds`, `capability` = `blender|uv|heartbeat` y
+`uv_products`), `POST /api/agent/claim/:id` (`409` si otro agente lo tomó),
+`POST /api/agent/progress/:id`, `POST /api/agent/upload-url/:id` (luego `PUT`
+directo a Supabase Storage), `POST /api/agent/complete/:id`,
+`GET /api/agent/jobs/:id/status` (detectar cancelación),
+`POST /api/agent/catalog/uv/sync`, `POST /api/agent/thumbnail`,
+`POST /api/agent/blend-download/:id/{upload-url,complete}` y
+`GET /api/agent/uv-preview/pending` + `POST /api/agent/uv-preview/:id/complete`.
+El agente **no envía su propia versión** al servidor (pendiente).
 
-1. El agente sincroniza únicamente nombres y metadatos del catálogo local.
-2. Los sliders llaman al preview loopback; el PNG temporal no pasa por Vercel.
-3. Si el navegador no está en la misma PC que el agente (loopback no
-   disponible), el preview cae a un canal remoto: el agente lo revisa en el
-   mismo poll loop del UV lane y sube el PNG por Vercel (KER3-43).
-   Si la vista trae un `PASS-opacity.exr` (negro = transparente, blanco =
-   visible), define el canal alfa del resultado como último paso; si no lo
-   trae, se usa el alfa de `PASS-all_white` como siempre (KER3-36).
-4. `Guardar versión` crea un job persistente y sube solo el PNG final.
-5. Los PSD, texturas fuente y archivos de escena UV permanecen en la PC.
-6. Las texturas remotas se descargan únicamente por HTTPS, con límite de
-   tamaño y validación de destino para impedir accesos a redes locales.
+**Job Blender:** poll → claim → se baja al disco temporal lo que el plan
+referencia por URL → se genera un runner `bpy` y se lanza
+`blender --background --python …` → se parsea stdout para progreso, muestras y
+ETA (máx. 1 reporte por segundo) → se suben solo los `.png/.jpg/.jpeg/.webp`
+(los **EXR se quedan en disco local** para post-producción) → `complete`.
+Cancelar desde la UI mata el proceso de Blender en segundos y el agente **no**
+llama `complete` para no pisar el estado `cancelled`.
 
-## Comprobación rápida de UV Lab
+**Tools de Blender** (`kernel_scripts`): `swap_label`, `set_cap_color`,
+`apply_material_overrides`, `set_active_view_layer`, `inspect_scene`, `render_one_view` (`frame`,
+`apply_postfx`), `render_all_cameras`, `render_rotations` y `render_at_angle`.
+Fuera de Blender: `export_psd` (psd-tools), `uv_retexture` (UV Lab V1) y
+`uv_compose` (carril UV). Stubs no registrados: `render_seven_views`,
+`export_pack`. Comportamientos que conviene conocer:
 
-1. Dejar `kernel-agent run` abierto.
-2. Abrir `https://kernel-renders-web.vercel.app/uv-lab` e iniciar sesión.
-3. Confirmar que la tarjeta del agente diga `Conectado` y muestre productos.
-4. Seleccionar un producto y mover `Gain` u `Opacidad`; la imagen debe cambiar
-   mientras se arrastra.
-5. Probar el campo numérico y sus botones `−`/`+`.
-6. Pulsar `Guardar versión` y esperar el estado `Completado`.
+- `apply_postfx=true` respeta el compositor del `.blend` (equivale a
+  "Composite"); en cada render se re-apuntan los nodos Render Layers al view
+  layer activo (KER3-40).
+- Si el `.blend` bloquea PNG (formato `OPEN_EXR_MULTILAYER`, muy común) se
+  renderiza en una **scene fresh**: hereda motor, resolución, GPU, transparencia
+  de vidrio, color management, world, cámara, frames, samples, ajustes de
+  sampling/denoise (KER3-42) y la **visibilidad por view layer** (KER3-42).
+- `set_cap_color`: con Base Color conectado a un nodo, actualiza el nodo Color
+  o desconecta el link y fuerza el valor (KER3-42).
+- `apply_material_overrides` (KER3-45): `{scene, overrides:[{object, slot,
+  material}]}` asigna el material al slot solo durante el render (el `.blend`
+  nunca se guarda) y falla listando las variantes disponibles si el objeto, el
+  slot o el material no existen. Un solo paso cubre todos los renders del plan.
+- `set_active_view_layer` nunca fuerza visibles los objetos que se ocultaron a
+  mano.
 
-Si no hay preview, comprobar que no exista otra aplicación usando el puerto
-`8765`, que la terminal del agente siga abierta y que la URL configurada sea
-exactamente la URL de la plataforma (sin una ruta adicional).
+**Componentes y variantes de material** (KER3-45): el mismo probe de Blender que
+lee view layers, cámaras y fotogramas (`scene_metadata.py`) añade `collection` y
+`components` a cada escena de `library`. Agrupa por el **prefijo del material**
+(texto antes del primer `_`) los meshes de las colecciones del producto
+(recursivo; salta `Drops` y las de luces); las variantes son todos los materiales
+del `.blend` con ese prefijo (también los de Fake User sin asignar), sin
+`Emissive_*`, `DropletMat*`, materiales con emisión ni el componente `Label`. El
+color de muestra sigue el link del Base Color. Solo se reporta si algún
+componente tiene 2+ variantes, y `api_client.poll` quita `components` si la
+query del GET supera 12 000 caracteres para no perder el heartbeat.
+
+### UV Lab (carril UV)
+
+Cada **vista** es una subcarpeta de un **producto** dentro de `Productos/`. Los
+pases se emparejan por **sufijo** del nombre, sin distinguir mayúsculas
+(`.exr .png .jpg .jpeg .tif .tiff .bmp`):
+
+| Pase | Rol |
+|---|---|
+| `PASS-uvpass` | Obligatorio: coordenadas UV |
+| `PASS-all_white` (antes `base_label1`) | Pase "con arte" |
+| `PASS-all_black` (antes `especular`) | Especular |
+| `PASS-base_label0` | Fondo "sin etiqueta" (modo dual) |
+| `PASS-track_matte-<Region>` | Regiones pintables (p. ej. Cap) |
+| `PASS-liquid-<nombre>` / `PASS-liquid_<nombre>` | Variantes de color de líquido |
+| `PASS-edges` | Opcional: antialiasing dirigido al exportar |
+| `PASS-opacity` | Opcional: negro = transparente, blanco = visible; define el alfa final (KER3-36); sin él se usa el alfa de `all_white` |
+| `sudado/` | Opcional: `PASS-shading_normal` (+ `all_black`) para el efecto de condensación |
+
+Una vista es válida con `uvpass` + (`all_white` | `base_label1` | `base_label0` |
+alguna variante de líquido). `Productos/generic.png` se usa para las
+miniaturas. El agente escanea cada 60 s y sincroniza **solo metadatos** (nunca
+EXR ni rutas absolutas). Las texturas de arte llegan por HTTPS con validación
+estricta (solo puerto 443, IPs públicas, ≤4 redirects, ≤100 MB, MIME permitido).
+
+**Preview en vivo:** el navegador llama `POST http://127.0.0.1:8765/v1/preview`
+(solo funciona si el agente está en la **misma PC**; CORS con allowlist de
+orígenes y `Access-Control-Allow-Private-Network`). Si eso falla por red, la web
+cae a un **canal remoto** (KER3-43): el agente revisa `uv-preview/pending` en el
+mismo loop del carril UV y sube el PNG (latencia ~5–8 s). **Guardar resultado
+final** es un job `uv_compose` por la cola.
+
+**Comprobación rápida de UV Lab:** con el agente abierto, entrar a
+`/uv-lab`, elegir producto, vista y textura; mover `Offset X` u `Opacidad` y ver
+que el preview cambia; pulsar "Guardar resultado final" y esperar `Completado`.
+Si no hay preview, revisa que no haya otra aplicación en el puerto `8765` y que
+Chrome/Brave haya aceptado el permiso de **Local Network Access** (si no, el
+preview usa el canal remoto, más lento).
 
 ## Estructura
 
 ```
 kernel-renders-agent/
-├── pyproject.toml
-├── README.md
+├── pyproject.toml            versión (fuente real; ver "Pendientes")
+├── README.md · .env.example · smoke_test.py
 ├── src/
-│   ├── kernel_agent/        # paquete principal
-│   │   ├── cli.py            # CLI con click
-│   │   ├── config.py         # carga/guarda config.json
-│   │   ├── setup_wizard.py   # wizard interactivo
-│   │   ├── api_client.py     # HTTP contra el server
-│   │   ├── gpu_detect.py     # detecta GPU via Blender
-│   │   ├── executor.py       # ejecuta plan via Blender headless
-│   │   ├── storage.py        # metadata de renders (upload viene)
-│   │   ├── uv_worker.py      # cola y catálogo UV
-│   │   ├── uv_executor.py    # composición UV determinista
-│   │   ├── uv_preview_server.py # preview HTTP solo-loopback
-│   │   └── daemon.py         # coordina ambos carriles
-│   └── kernel_scripts/       # (copia del paquete del monorepo)
-│       ├── swap_label.py
-│       ├── set_cap_color.py
-│       ├── apply_material_overrides.py  # variantes de material por componente (KER3-45)
-│       ├── set_view_layer.py
-│       ├── inspect_scene.py
-│       └── render_views.py
-└── tests/
+│   ├── kernel_agent/         proceso del agente
+│   │   ├── __main__.py · cli.py          CLI (click): setup, run, status, doctor, version
+│   │   ├── config.py · setup_wizard.py   AgentConfig, config.json, overrides por entorno, wizard
+│   │   ├── api_client.py                 cliente HTTP (x-api-key) de todos los endpoints
+│   │   ├── daemon.py                     carril Blender, heartbeat, cancel watcher, blend downloads;
+│   │   │                                 levanta UvWorker y UvPreviewServer
+│   │   ├── executor.py                   genera y lanza el runner bpy, progreso/ETA, cancelación
+│   │   ├── asset_materializer.py         baja URLs del plan a una carpeta temporal
+│   │   ├── storage.py                    sube renders y .blend por signed URL
+│   │   ├── library_scan.py               escanea .blend (view layers, cámaras, turntable, thumbnails)
+│   │   ├── scene_metadata.py             lee metadatos abriendo Blender headless (con caché)
+│   │   ├── blend_thumbnail.py            extrae el thumbnail embebido de un .blend
+│   │   ├── gpu_detect.py                 backend GPU y versión de Blender
+│   │   ├── psd_executor.py · psd_scan.py · psd_thumbnail.py   Export Pack y uv_retexture (sin bpy general)
+│   │   ├── uv_catalog.py                 escaneo del catálogo UV y convención de pases
+│   │   ├── uv_engine_core.py             motor 2D (cv2 + numpy) portado de UV Mapper
+│   │   ├── uv_executor.py                run_uv_compose y render_uv_preview_png, cachés, seguridad de texturas
+│   │   ├── uv_worker.py                  hilo del carril UV (catálogo, jobs, previews remotos)
+│   │   ├── uv_preview_server.py          preview HTTP solo-loopback (127.0.0.1)
+│   │   └── uv_thumbnails.py              miniaturas de producto para el picker
+│   └── kernel_scripts/       tools que corren dentro de Blender (salvo indicación)
+│       ├── swap_label.py · set_cap_color.py · set_view_layer.py · inspect_scene.py
+│       ├── apply_material_overrides.py   variantes de material por componente (KER3-45)
+│       ├── render_views.py               render_one_view / all_cameras / rotations / at_angle (+ stub seven_views)
+│       ├── export_pack.py                stub de Fase 4
+│       ├── psd_export.py                 export_psd (fuera de Blender: psd-tools + Pillow)
+│       └── uv_retexture.py               UV Lab V1 (renderiza un EXR de pases y compone sin Blender)
+└── tests/                    solo carril UV: test_uv_catalog, test_uv_preview_server, test_uv_state,
+                              test_uv_texture_security
 ```
+
+`kernel_scripts` es la copia que corre en producción; existe una copia hermana
+en `packages/scripts` del repo privado (mantenerlas sincronizadas).
+
+## Publicar una versión
+
+Todo cambio funcional del agente lleva **bump de versión + tag**:
+
+1. En el PR del cambio, sube `version` en `pyproject.toml` y el título de este README.
+2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
+3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
+
+Tags actuales: `agent-v0.2.0` … `agent-v0.5.0`. No hay CI ni GitHub Releases
+automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
 
-Si el admin quiere desconectar este agent: va a `/settings/agents` en la UI
-web y le da click a "Revocar". El próximo poll del agent falla con 401 y el
-daemon se detiene automáticamente.
+En `/settings/agents` (web), "Revocar". El próximo poll falla con 401 y el
+agente se detiene solo.
 
 ## Logs
 
-El daemon imprime a stdout con formato `HH:MM:SS [LEVEL] kernel-agent.X: ...`.
-Para guardarlos a archivo:
+Salida a stdout con formato `HH:MM:SS [LEVEL] kernel-agent.X: …`. Para guardarlos:
 
-```bash
-kernel-agent run 2>&1 | tee agent.log
+```powershell
+py -3.13 -m kernel_agent run 2>&1 | Tee-Object agent.log
 ```
 
-## Roadmap
+## Pendientes conocidos
 
-- [x] CLI con setup, run, status, doctor
-- [x] Autenticación con API key estática
-- [x] Ejecución de plan via Blender headless con GPU OptiX
-- [x] Reporte de progreso paso a paso
-- [x] UV Lab V2: catálogo local, preview interactivo y guardado final
-- [ ] Upload real de outputs a Supabase Storage (placeholder ahora)
-- [ ] Auto-start como servicio Windows (`kernel-agent install-service`)
-- [ ] Versión GUI con Tauri o Electron (system tray)
-- [ ] Auto-update del binario
+Detalle y contexto en `docs/PROJECT.md` §15 del repo privado.
+
+- [ ] `kernel_agent.__version__` está en `0.2.2` (el comando `version` y `smoke_test.py` lo imprimen); la versión real es la de `pyproject.toml`. Falta sincronizarlas.
+- [ ] Enviar la versión del agente al servidor en el poll (hoy la web no sabe qué versión corre cada PC).
+- [ ] Declarar `psd-tools` en las dependencias y decidir qué hacer con `python-dotenv` (declarado, sin uso).
+- [ ] Autodetectar y validar Blender ≥ 5.2 en `setup` y `doctor`.
+- [ ] Preguntar `psds_dir` en el wizard; `.env.example` pide Blender 5.1 y sugiere un `.env` que no se lee.
+- [ ] Tests para `executor`, `daemon`, `api_client` y `render_views`; CI.
+- [ ] Servicio de Windows (`install-service`).
+- [ ] Cancelación de las ramas PSD/`uv_retexture` y del carril UV (hoy no son cancelables).
+- [ ] Versión GUI (Tauri/Electron, system tray) y auto-update.
+
+Hecho (antes en el roadmap): CLI `setup/run/status/doctor`, autenticación con
+API key, ejecución con Blender headless y GPU OptiX, progreso paso a paso con
+muestras y ETA, subida real de renders a Supabase Storage, descarga bajo demanda
+de `.blend`, cancelación desde la UI, UV Lab V2 (catálogo, preview local y
+remoto, guardado final).
 
 ## Licencia
 
