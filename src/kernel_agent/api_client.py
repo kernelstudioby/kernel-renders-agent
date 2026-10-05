@@ -2,6 +2,7 @@
 
 Endpoints que consume:
   GET    /api/agent/poll              — busca job + heartbeat
+  POST   /api/agent/library           — catálogo de escenas (KER3-46, si existe)
   POST   /api/agent/claim/:id         — toma job atómicamente
   POST   /api/agent/progress/:id      — reporta avance
   POST   /api/agent/complete/:id      — sube outputs + marca completed
@@ -11,8 +12,10 @@ Toda request lleva header `x-api-key: <token>`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -22,6 +25,9 @@ log = logging.getLogger(__name__)
 
 # Vercel rechaza URLs de ~14 KB; dejamos margen.
 MAX_POLL_QUERY_CHARS = 12_000
+# Reenvío periódico del catálogo aunque no cambie (otro proceso o una versión
+# vieja del agente pudo pisar agents.library_scenes).
+LIBRARY_RESEND_SECONDS = 600
 
 
 class ApiError(Exception):
@@ -36,6 +42,11 @@ class ApiClient:
         self.server_url = server_url.rstrip("/")
         self.api_key = api_key
         self._warned_poll_size = False
+        # KER3-46: None = sin probar, True = el server acepta POST /api/agent/library,
+        # False = server sin la ruta (se vuelve a mandar el catálogo en la query).
+        self._library_via_post: bool | None = None
+        self._pushed_library_hash: str | None = None
+        self._pushed_library_at = 0.0
         self._client = httpx.Client(
             timeout=timeout,
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
@@ -79,7 +90,7 @@ class ApiClient:
             params["gpu"] = json.dumps(gpu_info)
         if blender_version:
             params["blender"] = blender_version
-        if library_scenes is not None:
+        if library_scenes is not None and not self._push_library(library_scenes):
             params["library"] = json.dumps(library_scenes, separators=(",", ":"))
         if library_psds is not None:
             params["psds"] = json.dumps(library_psds)
@@ -87,7 +98,7 @@ class ApiClient:
             params["capability"] = capability
         if uv_product_ids is not None:
             params["uv_products"] = json.dumps(uv_product_ids)
-        if library_scenes and len(urlencode(params)) > MAX_POLL_QUERY_CHARS:
+        if "library" in params and library_scenes and len(urlencode(params)) > MAX_POLL_QUERY_CHARS:
             dropped = self._fit_library(params, library_scenes)
             if dropped and not self._warned_poll_size:
                 log.warning(
@@ -97,6 +108,35 @@ class ApiClient:
                 )
                 self._warned_poll_size = True
         return self._request("GET", "/api/agent/poll", params=params)
+
+    def _push_library(self, library_scenes: list[dict]) -> bool:
+        """Manda el catálogo por POST (sin límite de URL) cuando cambia o cada
+        LIBRARY_RESEND_SECONDS. Devuelve True si el server ya tiene el catálogo
+        vigente y el poll puede omitir `library`: el server enruta jobs con lo
+        guardado. Con un server sin la ruta (404/405) se recuerda y el catálogo
+        sigue viajando en la query como antes."""
+        if self._library_via_post is False:
+            return False
+        body = json.dumps({"scenes": library_scenes}, separators=(",", ":"))
+        digest = hashlib.sha1(body.encode("utf-8")).hexdigest()
+        fresh = time.monotonic() - self._pushed_library_at < LIBRARY_RESEND_SECONDS
+        if self._library_via_post and digest == self._pushed_library_hash and fresh:
+            return True
+        try:
+            self._request("POST", "/api/agent/library", content=body)
+        except ApiError as e:
+            if e.status_code in (404, 405):
+                log.info("El server no tiene POST /api/agent/library; el catálogo va en la query del poll")
+                self._library_via_post = False
+            else:
+                log.warning("No se pudo enviar el catálogo por POST (%s); va en la query", e)
+            return False
+        if self._library_via_post is None:
+            log.info("Catálogo de escenas enviado por POST /api/agent/library")
+        self._library_via_post = True
+        self._pushed_library_hash = digest
+        self._pushed_library_at = time.monotonic()
+        return True
 
     @staticmethod
     def _fit_library(params: dict[str, str], library_scenes: list[dict]) -> list[str]:
