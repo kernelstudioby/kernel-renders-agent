@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.6.1
+# Kernel Renders Agent 0.7.0
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -137,7 +137,7 @@ agente): `GET /api/agent/poll` (heartbeat + siguiente job; envía `gpu`,
 `POST /api/agent/progress/:id`, `POST /api/agent/upload-url/:id` (luego `PUT`
 directo a Supabase Storage), `POST /api/agent/complete/:id`,
 `GET /api/agent/jobs/:id/status` (detectar cancelación),
-`POST /api/agent/catalog/uv/sync`, `POST /api/agent/thumbnail`,
+`POST /api/agent/catalog/uv/sync`, `POST /api/agent/library` (0.7.0), `POST /api/agent/thumbnail`,
 `POST /api/agent/blend-download/:id/{upload-url,complete}` y
 `GET /api/agent/uv-preview/pending` + `POST /api/agent/uv-preview/:id/complete`.
 El agente **no envía su propia versión** al servidor (pendiente).
@@ -193,7 +193,12 @@ timeline marker (no usa `frame_start..frame_end`, que no refleja los keyframes).
 existe. Sin markers ni `NULL_ANIMATOR` se reporta vacío; máximo 24 frames. Solo
 sirve para mostrar y para la IA: el render sigue recibiendo el número de frame.
 
-**Tamaño del poll:** la librería viaja en la query del GET (Vercel rechaza URLs
+**Catálogo por POST** (0.7.0, KER3-46): el catálogo de escenas se manda a
+`POST /api/agent/library` cuando cambia (hash) o cada 10 min, y el poll de Blender
+omite `library`; el server enruta jobs con lo guardado. Si el server no tiene la
+ruta (404/405) el agente lo recuerda y vuelve a mandar el catálogo en la query.
+
+**Tamaño del poll (modo query):** la librería viaja en la query del GET (Vercel rechaza URLs
 de ~14 KB). Si supera 12 000 caracteres, `api_client.poll` recorta escena por
 escena, de la más pesada a la más ligera: primero `frame_views` y al final
 `components` (que usa producción). En 0.6.0 se quitaba `components` de todas
@@ -287,7 +292,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.6.0` (`agent-v0.6.1` tras el merge del fix del poll). No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.6.1` (`agent-v0.7.0` tras el merge del catálogo por POST). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
