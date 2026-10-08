@@ -11,6 +11,14 @@ Storage); no abre puertos a internet.
 > [`kernelstudioby/Kernel-Renders`](https://github.com/kernelstudioby/Kernel-Renders)
 > (acceso solo para el equipo). Historial de cambios: `docs/CHANGELOG.md` de ese repo.
 
+## Documentación de este repo
+
+| Documento | Contenido |
+|---|---|
+| [docs/PROJECT.md](./docs/PROJECT.md) | Referencia técnica breve: qué hace, instalación, variables de entorno, comunicación con la web y estructura |
+| [docs/CHANGELOG.md](./docs/CHANGELOG.md) | Historia por versión (`agent-vX.Y.Z`) |
+| [docs/DECISIONES.md](./docs/DECISIONES.md) | Decisiones técnicas del agente |
+
 ## Por qué este repo es público
 
 Es **a propósito**. El agente se instala con `git clone` + `pip install -e .` en
@@ -249,6 +257,7 @@ preview usa el canal remoto, más lento).
 kernel-renders-agent/
 ├── pyproject.toml            versión (fuente real; ver "Pendientes")
 ├── README.md · .env.example · smoke_test.py
+├── docs/                     PROJECT.md · CHANGELOG.md · DECISIONES.md
 ├── src/
 │   ├── kernel_agent/         proceso del agente
 │   │   ├── __main__.py · cli.py          CLI (click): setup, run, status, doctor, version
