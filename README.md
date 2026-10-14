@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.7.0
+# Kernel Renders Agent 0.8.0
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -147,7 +147,8 @@ directo a Supabase Storage), `POST /api/agent/complete/:id`,
 `GET /api/agent/jobs/:id/status` (detectar cancelación),
 `POST /api/agent/catalog/uv/sync`, `POST /api/agent/library` (0.7.0), `POST /api/agent/thumbnail`,
 `POST /api/agent/blend-download/:id/{upload-url,complete}` y
-`GET /api/agent/uv-preview/pending` + `POST /api/agent/uv-preview/:id/complete`.
+`GET /api/agent/uv-preview/pending` + `POST /api/agent/uv-preview/:id/complete` y
+`POST /api/agent/library-install/:id` (0.8.0).
 El agente **no envía su propia versión** al servidor (pendiente).
 
 **Job Blender:** poll → claim → se baja al disco temporal lo que el plan
@@ -213,6 +214,19 @@ escena, de la más pesada a la más ligera: primero `frame_views` y al final
 las escenas a la vez y una PC con 11 escenas se quedó sin selector de
 materiales (0.6.1).
 
+**Instalar productos desde Library** (0.8.0, DEV-1103): cuando alguien sube un
+producto (.zip) en Library y elige este equipo, el poll de Blender trae
+`library_install` con una liga firmada. El agente lo atiende en un hilo aparte
+(`library_install.py`): descarga el .zip, rechaza rutas absolutas o con `..`,
+zips de más de 50 GB descomprimidos o inflados artificialmente, y exige un
+`.blend` en la carpeta del producto; descomprime en una carpeta temporal
+`.kr_install_*` dentro de `library_dir` y la mueve como `library_dir/<Producto>`
+(o `<Producto> (2)` si ya existe). Si el .zip trae una sola carpeta, esa es el
+producto; si trae archivos sueltos, el producto se llama como el .zip. Reporta
+`downloading` → `extracting` → `done` | `error`. Desde 0.8.0 el escaneo de la
+librería también busca `.blend` un nivel dentro de cada subcarpeta (ignora las
+que empiezan con `.` o `_`).
+
 ### UV Lab (carril UV)
 
 Cada **vista** es una subcarpeta de un **producto** dentro de `Productos/`. Los
@@ -268,7 +282,8 @@ kernel-renders-agent/
 │   │   ├── executor.py                   genera y lanza el runner bpy, progreso/ETA, cancelación
 │   │   ├── asset_materializer.py         baja URLs del plan a una carpeta temporal
 │   │   ├── storage.py                    sube renders y .blend por signed URL
-│   │   ├── library_scan.py               escanea .blend (view layers, cámaras, turntable, thumbnails)
+│   │   ├── library_scan.py               escanea .blend (raíz + un nivel de subcarpetas; view layers, cámaras, turntable, thumbnails)
+│   │   ├── library_install.py            instala en la librería un producto .zip subido desde Library (0.8.0)
 │   │   ├── scene_metadata.py             lee metadatos abriendo Blender headless (con caché)
 │   │   ├── blend_thumbnail.py            extrae el thumbnail embebido de un .blend
 │   │   ├── gpu_detect.py                 backend GPU y versión de Blender
@@ -301,7 +316,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.6.1` (`agent-v0.7.0` tras el merge del catálogo por POST). No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.7.0` (`agent-v0.8.0` tras el merge de la instalación de productos .zip). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
