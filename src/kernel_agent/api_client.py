@@ -286,6 +286,15 @@ class ApiClient:
             json={"error": error[:2000]},
         )
 
+    # --- DEV-1103: instalar en la librería un .zip subido desde Library ---
+
+    def report_library_install(self, install_id: str, status: str, **fields: str) -> dict[str, Any]:
+        """Reporta el avance: downloading | extracting | done (installed_name) | error (error)."""
+        body: dict[str, Any] = {"status": status, **fields}
+        if "error" in body:
+            body["error"] = str(body["error"])[:2000] or "error desconocido"
+        return self._request("POST", f"/api/agent/library-install/{install_id}", json=body)
+
     # --- KER3-43: preview UV remoto (fallback cuando el browser no está en
     # la misma PC que el agent y el loopback 127.0.0.1:8765 no aplica) ---
 

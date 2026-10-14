@@ -28,8 +28,10 @@ log = logging.getLogger("kernel-agent.library_scan")
 def scan_blend_files(library_dir: str) -> list[dict]:
     """Devuelve [{name, path, size_kb}, ...] para cada .blend en library_dir.
 
-    No recursivo: solo el primer nivel. Si library_dir no existe o está vacío
-    devuelve lista vacía sin error.
+    Revisa el primer nivel y un nivel dentro de cada subcarpeta (DEV-1103: un
+    producto instalado desde Library vive en su propia carpeta con sus
+    texturas). Se ignoran las carpetas que empiezan con "." o "_" (temporales).
+    Si library_dir no existe o está vacío devuelve lista vacía sin error.
     """
     if not library_dir:
         return []
@@ -38,7 +40,16 @@ def scan_blend_files(library_dir: str) -> list[dict]:
         return []
     out: list[dict] = []
     try:
+        entries: list[Path] = []
         for entry in sorted(root.iterdir()):
+            if entry.is_dir() and not entry.name.startswith((".", "_")):
+                try:
+                    entries.extend(sorted(p for p in entry.iterdir() if p.is_file()))
+                except OSError:
+                    continue
+            else:
+                entries.append(entry)
+        for entry in entries:
             if not entry.is_file():
                 continue
             if entry.suffix.lower() != ".blend":

@@ -13,6 +13,7 @@ from pathlib import Path
 from .api_client import ApiClient, ApiError
 from .config import AgentConfig
 from .executor import execute_plan
+from .library_install import LibraryInstaller
 from .library_scan import scan_blend_files_with_view_layers
 from .psd_executor import execute_psd_plan, is_psd_plan
 from .psd_scan import scan_psd_files
@@ -106,6 +107,7 @@ class AgentDaemon:
         self.cfg = cfg
         self.client = ApiClient(cfg.server_url, cfg.api_key)
         self.should_stop = False
+        self.installer = LibraryInstaller(self.client, cfg.library_dir)
 
     def run(self) -> None:
         log.info("Render Agent online · server=%s", self.cfg.server_url)
@@ -167,6 +169,12 @@ class AgentDaemon:
         blend_download = result.get("blend_download")
         if blend_download:
             self._handle_blend_download(blend_download)
+
+        # DEV-1103: producto (.zip) subido desde Library; se instala en segundo
+        # plano y aparece en el catálogo con el escaneo de un tick siguiente.
+        library_install = result.get("library_install")
+        if library_install:
+            self.installer.submit(library_install)
 
         job = result.get("job")
         if not job:
