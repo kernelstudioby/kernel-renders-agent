@@ -10,7 +10,7 @@
 |---|---|
 | **Última revisión** | 2026-10-07 |
 | **Commit verificado** | `8c51d1c` (rama `main`) |
-| **Versión** | `0.7.0` (`pyproject.toml`; tag `agent-v0.7.0`) |
+| **Versión** | `0.8.1` (`pyproject.toml`; tag `agent-v0.8.1` al mergear DEV-1156) |
 | **Historial de cambios** | [`docs/CHANGELOG.md`](./CHANGELOG.md) |
 | **Decisiones** | [`docs/DECISIONES.md`](./DECISIONES.md) |
 

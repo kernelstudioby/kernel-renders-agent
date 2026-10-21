@@ -29,6 +29,19 @@ Kernel Renders en Linear antes de la clave `KER3`.
 
 ---
 
+## 2026-10-21 — 0.8.1: renders en GPU aunque OptiX no esté disponible
+
+**Tipo:** fix · **PR:** #35 · **Tickets:** DEV-1156
+
+Con un driver de NVIDIA viejo, OptiX falla y Blender lista la tarjeta solo como CUDA.
+El agente contaba cualquier device que no fuera CPU como "GPU OptiX", dejaba
+`compute_device_type=OPTIX` sin devices usables y Cycles renderizaba en CPU sin avisar
+(PC-SPARTAN-2, RTX 3080 Ti). Ahora el runner y `gpu_detect` filtran por el tipo del
+backend, así que se cae a CUDA. También: `render_views` pone `cycles.device=GPU` cuando el
+plan cambia el motor a Cycles; la consola registra en vivo el device elegido o un aviso
+de CPU; `run` vuelve a detectar la GPU al arrancar; `version` lee la versión real del
+paquete (estaba fija en 0.2.2).
+
 ## 2026-10-07 — Docs: estructura estándar de documentación
 
 **Tipo:** docs

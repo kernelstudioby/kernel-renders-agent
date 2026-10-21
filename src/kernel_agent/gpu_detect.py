@@ -23,7 +23,9 @@ for backend in ("OPTIX", "CUDA", "HIP", "ONEAPI"):
     try:
         prefs.compute_device_type = backend
         prefs.get_devices()
-        gpus = [d.name for d in prefs.devices if d.type != "CPU"]
+        # DEV-1156: con OptiX caído la GPU aparece solo como CUDA; filtrar por
+        # backend para no reportar OPTIX cuando no sirve.
+        gpus = [d.name for d in prefs.devices if d.type == backend]
         if gpus:
             result["backend"] = backend
             result["devices"] = gpus
