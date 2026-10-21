@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -29,7 +30,7 @@ if _sys.platform == "win32":
 
 from . import __version__
 from .api_client import ApiClient, ApiError
-from .config import AgentConfig, config_path, is_configured, load_config
+from .config import AgentConfig, config_path, is_configured, load_config, save_config
 from .daemon import AgentDaemon
 from .gpu_detect import detect_gpu
 from .setup_wizard import run_wizard
@@ -71,6 +72,15 @@ def run() -> None:
             "[red]No hay configuración. Ejecuta primero:[/red] [bold cyan]kernel-agent setup[/bold cyan]"
         )
         sys.exit(1)
+
+    # DEV-1156: gpu_info solo se detectaba en setup y quedaba viejo (un equipo
+    # seguía reportando OPTIX después de que un driver viejo lo dejara caer).
+    if cfg.blender_bin and Path(cfg.blender_bin).exists():
+        console.print("[dim]Detectando GPU...[/dim]")
+        gpu = detect_gpu(cfg.blender_bin)
+        if "error" not in gpu and "stderr_tail" not in gpu and gpu != cfg.gpu_info:
+            cfg.gpu_info = gpu
+            save_config(cfg)
 
     console.print(
         Panel.fit(
@@ -129,7 +139,6 @@ def doctor() -> None:
     table.add_row("Config configurada", "[green][OK][/green] Sí" if is_configured(cfg) else "[red][X][/red] No (corre 'kernel-agent setup')")
 
     # 2. Blender disponible
-    from pathlib import Path
     blender_ok = bool(cfg.blender_bin) and Path(cfg.blender_bin).exists()
     table.add_row("Blender encontrado", f"[green][OK][/green] {cfg.blender_bin}" if blender_ok else "[red][X][/red] No")
 

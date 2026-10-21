@@ -16,10 +16,13 @@ Estructura del plan:
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger("kernel-agent.executor")
 
 
 @dataclass
@@ -110,25 +113,33 @@ def main():
     print(f"[setup] Cargando escena: {{first_scene}}", flush=True)
     bpy.ops.wm.open_mainfile(filepath=str(first_scene))
 
-    # Habilitar GPU para Cycles si esta disponible
+    # Habilitar GPU para Cycles si esta disponible.
+    # DEV-1156: hay que filtrar por d.type == backend. Con OptiX caído (driver
+    # viejo) Blender lista la GPU solo como CUDA; contarla como "GPU OptiX"
+    # dejaba compute_device_type=OPTIX sin ningún device usable y Cycles
+    # renderizaba en CPU sin avisar.
+    gpu_backend = None
     try:
         cycles_prefs = bpy.context.preferences.addons["cycles"].preferences
         for backend in ("OPTIX", "CUDA", "HIP", "ONEAPI"):
             try:
                 cycles_prefs.compute_device_type = backend
                 cycles_prefs.get_devices()
-                devices = [d for d in cycles_prefs.devices if d.type != "CPU"]
+                devices = [d for d in cycles_prefs.devices if d.type == backend]
                 if devices:
                     for d in cycles_prefs.devices:
-                        d.use = d.type != "CPU"
-                    print(f"[setup] GPU backend={{backend}} devices={{[d.name for d in devices]}}", flush=True)
-                    if bpy.context.scene.render.engine == "CYCLES":
-                        bpy.context.scene.cycles.device = "GPU"
+                        d.use = d.type == backend
+                    gpu_backend = backend
+                    print(f"[device] GPU backend={{backend}} devices={{[d.name for d in devices]}}", flush=True)
                     break
             except (TypeError, AttributeError):
                 continue
     except (KeyError, AttributeError):
         pass
+    if gpu_backend is None:
+        print("[device] AVISO: sin GPU usable (OptiX/CUDA/HIP/oneAPI); Cycles renderizará en CPU", flush=True)
+    elif bpy.context.scene.render.engine == "CYCLES":
+        bpy.context.scene.cycles.device = "GPU"
 
     # Relink texturas faltantes preservando las packed
     def _is_truly_missing(img):
@@ -329,6 +340,15 @@ def execute_plan(
         assert proc.stdout is not None
         for line in proc.stdout:
             stdout_lines.append(line)
+
+            # DEV-1156: el device se registra en vivo; las demás líneas de
+            # diagnóstico solo salen al terminar y un job cancelado no llega ahí.
+            if line.startswith("[device]"):
+                msg = line.strip()
+                if "AVISO" in msg:
+                    log.warning("%s", msg)
+                else:
+                    log.info("%s", msg)
 
             # 1) Boundary entre steps: emite progress 'step done' con message
             if on_step_done and "[step " in line:

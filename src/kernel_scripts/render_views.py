@@ -287,6 +287,21 @@ def run_render_one_view(
         normalized_engine = blender_scene.render.engine
         print(f"[render setup] engine de la escena={normalized_engine}", flush=True)
 
+    # DEV-1156: el runner solo pone cycles.device=GPU si la escena ya era
+    # Cycles al abrirla; con un override de engine se quedaba con el device
+    # guardado en el .blend.
+    if normalized_engine == "CYCLES":
+        try:
+            prefs = bpy.context.preferences.addons["cycles"].preferences
+            if any(d.use and d.type == prefs.compute_device_type for d in prefs.devices):
+                blender_scene.cycles.device = "GPU"
+        except (KeyError, AttributeError):
+            pass
+        print(
+            f"[device] render cycles.device={getattr(blender_scene.cycles, 'device', 'n/a')}",
+            flush=True,
+        )
+
     # 3. Resolución: override opcional
     if resolution_x is not None:
         blender_scene.render.resolution_x = resolution_x

@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.8.0
+# Kernel Renders Agent 0.8.1
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -100,7 +100,8 @@ El wizard pregunta, en orden:
 6. Carpeta de productos UV (opcional; vacía desactiva el carril UV).
 7. Puerto del preview UV (default `8765`; solo si hay carpeta UV).
 8. Intervalo de polling en segundos (default `5`).
-9. Detecta la GPU abriendo Blender headless (~30 s).
+9. Detecta la GPU abriendo Blender headless (~30 s). Desde 0.8.1 `run` la vuelve a
+   detectar al arrancar, para que la web no muestre un backend que ya no funciona.
 
 `psds_dir` **no** se pregunta en el wizard (solo con la variable `PSDS_DIR` o
 editando `config.json`). Si `setup` se traba con caracteres raros (`←[36m`), usa
@@ -173,6 +174,11 @@ Fuera de Blender: `export_psd` (psd-tools), `uv_retexture` (UV Lab V1) y
   renderiza en una **scene fresh**: hereda motor, resolución, GPU, transparencia
   de vidrio, color management, world, cámara, frames, samples, ajustes de
   sampling/denoise (KER3-42) y la **visibilidad por view layer** (KER3-42).
+- **GPU** (0.8.1, DEV-1156): antes de cada job se prueba OptiX → CUDA → HIP →
+  oneAPI y se usa el primero que tenga un device **de ese tipo**. Si OptiX falla
+  (p. ej. driver de NVIDIA viejo) la misma tarjeta se usa por CUDA. La consola
+  muestra en vivo `[device] GPU backend=…` o `[device] AVISO: sin GPU usable…`
+  cuando Cycles va a renderizar en CPU.
 - `set_cap_color`: con Base Color conectado a un nodo, actualiza el nodo Color
   o desconecta el link y fuerza el valor (KER3-42).
 - `apply_material_overrides` (KER3-45): `{scene, overrides:[{object, slot,
@@ -316,7 +322,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.7.0` (`agent-v0.8.0` tras el merge de la instalación de productos .zip). No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.8.0` (`agent-v0.8.1` tras el merge de DEV-1156). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
@@ -336,7 +342,7 @@ py -3.13 -m kernel_agent run 2>&1 | Tee-Object agent.log
 
 Detalle y contexto en `docs/PROJECT.md` §15 del repo privado.
 
-- [ ] `kernel_agent.__version__` está en `0.2.2` (el comando `version` y `smoke_test.py` lo imprimen); la versión real es la de `pyproject.toml`. Falta sincronizarlas.
+- [x] `kernel_agent.__version__` se lee de la metadata del paquete (0.8.1, DEV-1156); antes estaba fijo en `0.2.2`. Si `version` muestra una versión vieja, falta correr `pip install -e .`.
 - [ ] Enviar la versión del agente al servidor en el poll (hoy la web no sabe qué versión corre cada PC).
 - [ ] Declarar `psd-tools` en las dependencias y decidir qué hacer con `python-dotenv` (declarado, sin uso).
 - [ ] Autodetectar y validar Blender ≥ 5.2 en `setup` y `doctor`.

@@ -7,4 +7,11 @@ escenas locales. Sube los renders a Supabase Storage.
 Patrón de auth: api_key estática por agente (stilo Kernel Pack CEP).
 """
 
-__version__ = "0.2.2"
+from importlib.metadata import PackageNotFoundError, version
+
+# DEV-1156: antes era un literal fijo en "0.2.2" desde agosto. Se lee de la
+# metadata del paquete, que se actualiza con `pip install -e .`.
+try:
+    __version__ = version("kernel-renders-agent")
+except PackageNotFoundError:
+    __version__ = "desconocida"
