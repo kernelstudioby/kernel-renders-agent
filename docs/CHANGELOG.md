@@ -31,7 +31,7 @@ Kernel Renders en Linear antes de la clave `KER3`.
 
 ## 2026-11-18 — 0.8.2: el compositor recibe los pases del view layer
 
-**Tipo:** fix · **PR:** por confirmar · **Tickets:** DEV-1358
+**Tipo:** fix · **PR:** #36 · **Tickets:** DEV-1358
 
 Con `apply_postfx=true` el render salía como si el nodo "Etiqueta aparte" del compositor
 no existiera: la rama PNG de `render_one_view` apagaba todos los pases del view layer
