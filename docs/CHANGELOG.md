@@ -37,7 +37,7 @@ Con `apply_postfx=true` el render salía como si el nodo "Etiqueta aparte" del c
 no existiera: la rama PNG de `render_one_view` apagaba todos los pases del view layer
 (regla para evitar EXR multicapa) y el nodo se quedaba sin Material Index, así que su
 máscara salía vacía. Ahora, con postfx, el view layer se respeta tal cual y el compositor
-llega completo al Group Output. Con el `.blend` de Cristal 300 ml, el render del agente
+llega completo al Group Output. Con el `.blend` del ticket, el render del agente
 queda idéntico pixel por pixel al de Blender a mano. Sin postfx no cambia nada.
 
 ## 2026-10-21 — 0.8.1: renders en GPU aunque OptiX no esté disponible
