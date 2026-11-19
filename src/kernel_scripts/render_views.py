@@ -477,9 +477,14 @@ def run_render_one_view(
     # Cuando un view_layer tiene passes adicionales activos (Cryptomatte,
     # Mist, AO, denoising data, etc.), Blender bloquea el file_format a
     # OPEN_EXR_MULTILAYER. Para PNG necesitamos SOLO el pass Combined.
+    # DEV-1358: con apply_postfx el compositor del .blend puede leer pases
+    # (p. ej. el nodo "Etiqueta aparte" usa Material Index); apagarlos lo deja
+    # sin datos y el render sale como si el nodo no existiera. Se respeta el
+    # view layer tal cual; si el formato queda bloqueado, entra el workaround
+    # de abajo.
     passes_disabled = 0
     for vl in blender_scene.view_layers:
-        if not vl.use:
+        if not vl.use or apply_postfx:
             continue
         for attr in dir(vl):
             if not attr.startswith("use_pass_"):

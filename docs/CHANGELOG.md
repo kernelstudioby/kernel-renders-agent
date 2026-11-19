@@ -29,6 +29,17 @@ Kernel Renders en Linear antes de la clave `KER3`.
 
 ---
 
+## 2026-11-18 — 0.8.2: el compositor recibe los pases del view layer
+
+**Tipo:** fix · **PR:** #36 · **Tickets:** DEV-1358
+
+Con `apply_postfx=true` el render salía como si el nodo "Etiqueta aparte" del compositor
+no existiera: la rama PNG de `render_one_view` apagaba todos los pases del view layer
+(regla para evitar EXR multicapa) y el nodo se quedaba sin Material Index, así que su
+máscara salía vacía. Ahora, con postfx, el view layer se respeta tal cual y el compositor
+llega completo al Group Output. Con el `.blend` del ticket, el render del agente
+queda idéntico pixel por pixel al de Blender a mano. Sin postfx no cambia nada.
+
 ## 2026-10-21 — 0.8.1: renders en GPU aunque OptiX no esté disponible
 
 **Tipo:** fix · **PR:** #35 · **Tickets:** DEV-1156

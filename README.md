@@ -1,4 +1,4 @@
-# Kernel Renders Agent 0.8.1
+# Kernel Renders Agent 0.8.2
 
 Servicio Python que corre en las PCs con GPU de **Kernel Renders** (plataforma
 interna de CGI de Beyond Design): ejecuta renders de Blender headless y
@@ -169,7 +169,10 @@ Fuera de Blender: `export_psd` (psd-tools), `uv_retexture` (UV Lab V1) y
 
 - `apply_postfx=true` respeta el compositor del `.blend` (equivale a
   "Composite"); en cada render se re-apuntan los nodos Render Layers al view
-  layer activo (KER3-40).
+  layer activo (KER3-40). Desde 0.8.2 (DEV-1358) tampoco se apagan los pases
+  del view layer, porque el compositor puede leerlos (p. ej. el nodo "Etiqueta
+  aparte" usa Material Index). Sin postfx se siguen apagando para dejar solo
+  Combined.
 - Si el `.blend` bloquea PNG (formato `OPEN_EXR_MULTILAYER`, muy común) se
   renderiza en una **scene fresh**: hereda motor, resolución, GPU, transparencia
   de vidrio, color management, world, cámara, frames, samples, ajustes de
@@ -322,7 +325,7 @@ Todo cambio funcional del agente lleva **bump de versión + tag**:
 2. Tras el merge: `git tag -a agent-vX.Y.Z -m "descripción"` y `git push origin agent-vX.Y.Z`.
 3. Avisa a quien opere agentes (Moy) que ejecute `git pull` + `pip install -e .` y reinicie.
 
-Tags actuales: `agent-v0.2.0` … `agent-v0.8.0` (`agent-v0.8.1` tras el merge de DEV-1156). No hay CI ni GitHub Releases
+Tags actuales: `agent-v0.2.0` … `agent-v0.8.1` (`agent-v0.8.2` tras el merge de DEV-1358). No hay CI ni GitHub Releases
 automatizados. Los cambios solo de docs no llevan bump.
 
 ## Revocar acceso
